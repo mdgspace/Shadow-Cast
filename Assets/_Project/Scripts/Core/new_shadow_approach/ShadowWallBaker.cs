@@ -577,8 +577,13 @@ public class ShadowWallBaker : MonoBehaviour
         // 1. Quicksand Trigger Polygon Collider
         PolygonCollider2D poly = go.AddComponent<PolygonCollider2D>();
         poly.isTrigger = true;
-        poly.pathCount = 1;
-        poly.SetPath(0, contour.wallSpacePoints.ToArray());
+        List<List<Vector2>> colliderPaths = contour.wallSpacePaths;
+        if (colliderPaths == null || colliderPaths.Count == 0)
+            colliderPaths = new List<List<Vector2>> { contour.wallSpacePoints };
+
+        poly.pathCount = colliderPaths.Count;
+        for (int pathIndex = 0; pathIndex < colliderPaths.Count; pathIndex++)
+            poly.SetPath(pathIndex, colliderPaths[pathIndex].ToArray());
 
         // 2. Quicksand Effector with Buoyancy
         ShadowQuicksandEffector effector = go.AddComponent<ShadowQuicksandEffector>();

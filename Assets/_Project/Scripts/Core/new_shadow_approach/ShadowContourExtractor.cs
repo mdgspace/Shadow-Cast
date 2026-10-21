@@ -12,7 +12,9 @@ public static class ShadowContourExtractor
     public struct ContourData
     {
         public List<Vector2> wallSpacePoints; // Wall-local 2D coordinates for PolygonCollider2D
+        public List<List<Vector2>> wallSpacePaths; // Outer path followed by optional hole paths
         public List<Vector2> uvPoints;        // Normalized [0..1] texture coordinates
+        public List<List<Vector2>> uvPaths;    // Outer UV path followed by optional hole paths
         public float averageIntensity;        // Average shadow intensity [0..1]
         public float softness;                // 0.0 = crisp edge, 1.0 = highly diffuse
         public float area;                    // Area in wall square meters
@@ -29,6 +31,14 @@ public static class ShadowContourExtractor
             this.a = a;
             this.b = b;
         }
+    }
+
+    private sealed class PreparedLoop
+    {
+        public List<Vector2> uv;
+        public List<Vector2> wall;
+        public float uvArea;
+        public float wallArea;
     }
 
     /// <summary>
@@ -124,7 +134,9 @@ public static class ShadowContourExtractor
             crispContours.Add(new ContourData
             {
                 wallSpacePoints = wallPts,
+                wallSpacePaths = new List<List<Vector2>> { wallPts },
                 uvPoints = simplified,
+                uvPaths = new List<List<Vector2>> { simplified },
                 averageIntensity = avgIntensity,
                 softness = 0.0f,
                 area = ComputePolygonArea(wallPts),
@@ -152,6 +164,7 @@ public static class ShadowContourExtractor
         }
 
         List<List<Vector2>> rawSoftUVs = MarchingSquares(softMask, width, height, 0.5f, false, 0f);
+        List<PreparedLoop> softLoops = new List<PreparedLoop>();
         for (int i = 0; i < rawSoftUVs.Count; i++)
         {
             List<Vector2> loop = ClampUVLoopToSnapshot(rawSoftUVs[i]);
@@ -161,22 +174,85 @@ public static class ShadowContourExtractor
             List<Vector2> simplified = SimplifyPolygonRDP(loop, simplificationTolerance);
             if (simplified.Count < 3) continue;
 
-            float avgIntensity = SampleAverageIntensityInsidePolygon(grid, width, height, simplified);
-            
-            // Softness calculation:
-            // If avgIntensity is near crispThreshold -> softness is low (near 0, slow sink)
-            // If avgIntensity is near softThreshold -> softness is high (near 1, fast sink)
-            float softness = Mathf.Clamp01((crispThreshold - avgIntensity) / Mathf.Max(0.001f, crispThreshold - softThreshold));
-
             List<Vector2> wallPts = MapUVToWallSpace(simplified, wallBounds, isPlaneMesh);
+            softLoops.Add(new PreparedLoop
+            {
+                uv = simplified,
+                wall = wallPts,
+                uvArea = ComputePolygonArea(simplified),
+                wallArea = ComputePolygonArea(wallPts)
+            });
+        }
+
+        // The soft mask is a band around the crisp core. Marching squares therefore
+        // returns an outer boundary and one or more inner boundaries. Group those
+        // boundaries into one polygon-with-holes per disconnected soft region.
+        for (int i = 0; i < softLoops.Count; i++)
+        {
+            PreparedLoop outer = softLoops[i];
+            bool isHole = false;
+
+            for (int j = 0; j < softLoops.Count; j++)
+            {
+                if (i == j || softLoops[j].uvArea <= outer.uvArea)
+                    continue;
+
+                if (IsPointInPolygon(outer.uv[0], softLoops[j].uv))
+                {
+                    isHole = true;
+                    break;
+                }
+            }
+
+            if (isHole)
+                continue;
+
+            List<List<Vector2>> uvPaths = new List<List<Vector2>> { EnsureWinding(outer.uv, clockwise: true) };
+            List<List<Vector2>> wallPaths = new List<List<Vector2>> { EnsureWinding(outer.wall, clockwise: true) };
+            float ringArea = outer.wallArea;
+
+            for (int j = 0; j < softLoops.Count; j++)
+            {
+                if (i == j || softLoops[j].uvArea >= outer.uvArea)
+                    continue;
+
+                if (!IsPointInPolygon(softLoops[j].uv[0], outer.uv))
+                    continue;
+
+                bool enclosedByAnotherLoop = false;
+                for (int k = 0; k < softLoops.Count; k++)
+                {
+                    if (k == i || k == j || softLoops[k].uvArea <= softLoops[j].uvArea || softLoops[k].uvArea >= outer.uvArea)
+                        continue;
+
+                    if (IsPointInPolygon(softLoops[j].uv[0], softLoops[k].uv))
+                    {
+                        enclosedByAnotherLoop = true;
+                        break;
+                    }
+                }
+
+                if (enclosedByAnotherLoop)
+                    continue;
+
+                uvPaths.Add(EnsureWinding(softLoops[j].uv, clockwise: false));
+                wallPaths.Add(EnsureWinding(softLoops[j].wall, clockwise: false));
+                ringArea -= softLoops[j].wallArea;
+            }
+
+            float avgIntensity = SampleAverageIntensityInsidePaths(grid, width, height, uvPaths);
+            float softness = Mathf.Clamp01((crispThreshold - avgIntensity) /
+                Mathf.Max(0.001f, crispThreshold - softThreshold));
 
             softContours.Add(new ContourData
             {
-                wallSpacePoints = wallPts,
-                uvPoints = simplified,
+                wallSpacePoints = wallPaths[0],
+                wallSpacePaths = wallPaths,
+                uvPoints = uvPaths[0],
+                uvPaths = uvPaths,
                 averageIntensity = avgIntensity,
                 softness = softness,
-                area = ComputePolygonArea(wallPts),
+                area = Mathf.Max(0f, ringArea),
                 isCrisp = false
             });
         }
@@ -299,6 +375,31 @@ public static class ShadowContourExtractor
         }
 
         return clamped;
+    }
+
+    private static List<Vector2> EnsureWinding(List<Vector2> points, bool clockwise)
+    {
+        List<Vector2> result = new List<Vector2>(points);
+        bool isClockwise = SignedPolygonArea(result) < 0f;
+        if (isClockwise != clockwise)
+            result.Reverse();
+
+        return result;
+    }
+
+    private static float SignedPolygonArea(List<Vector2> points)
+    {
+        if (points == null || points.Count < 3) return 0f;
+
+        float area = 0f;
+        for (int i = 0; i < points.Count; i++)
+        {
+            Vector2 a = points[i];
+            Vector2 b = points[(i + 1) % points.Count];
+            area += a.x * b.y - b.x * a.y;
+        }
+
+        return area * 0.5f;
     }
 
     private static Vector2 Interpolate(Vector2 pA, Vector2 pB, float valA, float valB, float threshold)
@@ -533,6 +634,61 @@ public static class ShadowContourExtractor
         }
 
         return count > 0 ? (sum / count) : 0.5f;
+    }
+
+    private static float SampleAverageIntensityInsidePaths(float[,] grid, int w, int h, List<List<Vector2>> paths)
+    {
+        if (paths == null || paths.Count == 0)
+            return 0.5f;
+
+        float minU = 1f, maxU = 0f, minV = 1f, maxV = 0f;
+        for (int p = 0; p < paths.Count; p++)
+        {
+            for (int i = 0; i < paths[p].Count; i++)
+            {
+                Vector2 point = paths[p][i];
+                minU = Mathf.Min(minU, point.x);
+                maxU = Mathf.Max(maxU, point.x);
+                minV = Mathf.Min(minV, point.y);
+                maxV = Mathf.Max(maxV, point.y);
+            }
+        }
+
+        int startX = Mathf.Clamp(Mathf.FloorToInt(minU * (w - 1)), 0, w - 1);
+        int endX = Mathf.Clamp(Mathf.CeilToInt(maxU * (w - 1)), 0, w - 1);
+        int startY = Mathf.Clamp(Mathf.FloorToInt(minV * (h - 1)), 0, h - 1);
+        int endY = Mathf.Clamp(Mathf.CeilToInt(maxV * (h - 1)), 0, h - 1);
+
+        float sum = 0f;
+        int count = 0;
+        for (int y = startY; y <= endY; y++)
+        {
+            float v = (float)y / (h - 1);
+            for (int x = startX; x <= endX; x++)
+            {
+                Vector2 point = new Vector2((float)x / (w - 1), v);
+                if (!IsPointInPolygon(point, paths[0]))
+                    continue;
+
+                bool insideHole = false;
+                for (int p = 1; p < paths.Count; p++)
+                {
+                    if (IsPointInPolygon(point, paths[p]))
+                    {
+                        insideHole = true;
+                        break;
+                    }
+                }
+
+                if (!insideHole)
+                {
+                    sum += grid[x, y];
+                    count++;
+                }
+            }
+        }
+
+        return count > 0 ? sum / count : 0.5f;
     }
 
     private static bool IsPointInPolygon(Vector2 pt, List<Vector2> poly)
