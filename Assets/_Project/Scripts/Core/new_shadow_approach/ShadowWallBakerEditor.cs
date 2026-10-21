@@ -70,7 +70,7 @@ public class ShadowWallBakerEditor : Editor
         Color originalColor = GUI.backgroundColor;
         GUI.backgroundColor = new Color(0.2f, 0.85f, 0.4f);
 
-        if (GUILayout.Button("⚡ BAKE SHADOW COLLIDERS", bakeButtonStyle))
+        if (GUILayout.Button("BAKE SHADOW COLLIDERS", bakeButtonStyle))
         {
             Undo.RecordObject(baker, "Bake Shadows");
             baker.Bake();
