@@ -1,0 +1,575 @@
+using System;
+using System.Collections.Generic;
+using System.Reflection;
+using UnityEngine;
+using UnityEngine.EventSystems;
+using UnityEngine.InputSystem;
+using UnityEngine.InputSystem.UI;
+using UnityEngine.UI;
+using UnityEngine.XR;
+using ShadowCast.Core.BuildMode;
+
+namespace ShadowCast.Core.Campaign
+{
+    /// <summary>Starts the complete sample campaign in any scene containing a MainCamera.</summary>
+    public sealed class ShadowCastExperienceBootstrap : MonoBehaviour
+    {
+        [Header("Optional replaceable model prefabs (unit sized)")]
+        [SerializeField] private GameObject blockPrefab;
+        [SerializeField] private GameObject rampPrefab;
+        [SerializeField] private GameObject orbPrefab;
+        [SerializeField] private GameObject spotlightPrefab;
+        [SerializeField] private GameObject characterPrefab;
+        [SerializeField] private GameObject goalPrefab;
+
+        public GameObject BlockPrefab { get; private set; }
+        public GameObject RampPrefab { get; private set; }
+        public GameObject OrbPrefab { get; private set; }
+
+        [RuntimeInitializeOnLoadMethod(RuntimeInitializeLoadType.AfterSceneLoad)]
+        private static void StartExperience()
+        {
+            if (FindAnyObjectByType<ShadowCastExperienceBootstrap>() != null) return;
+            GameObject root = new GameObject("Shadow Cast Experience");
+            DontDestroyOnLoad(root);
+            root.AddComponent<ShadowCastExperienceBootstrap>();
+        }
+
+        private void Awake()
+        {
+            Camera camera = Camera.main;
+            if (camera == null)
+            {
+                GameObject cameraObject = new GameObject("Main Camera");
+                cameraObject.tag = "MainCamera";
+                cameraObject.transform.position = new Vector3(0f, 1.6f, 0f);
+                camera = cameraObject.AddComponent<Camera>();
+                cameraObject.AddComponent<AudioListener>();
+            }
+
+            EnsureEventSystem();
+            BuildModeManager build = FindAnyObjectByType<BuildModeManager>();
+            if (build == null) build = gameObject.AddComponent<BuildModeManager>();
+            XRControllerAnchorDriver anchors = gameObject.AddComponent<XRControllerAnchorDriver>();
+            Transform rightAnchor = new GameObject("ShadowCast_RightControllerAnchor").transform;
+            Transform leftAnchor = new GameObject("ShadowCast_LeftControllerAnchor").transform;
+            rightAnchor.SetParent(transform, false); leftAnchor.SetParent(transform, false);
+            anchors.Initialize(rightAnchor, leftAnchor, build, camera);
+            CampaignLevelRuntime runtime = gameObject.AddComponent<CampaignLevelRuntime>();
+            CampaignFlowController flow = gameObject.AddComponent<CampaignFlowController>();
+            ChapterDefinition chapter = CreateSampleCampaign();
+            SetField(runtime, "characterPrefab", characterPrefab);
+            SetField(runtime, "goalPrefab", goalPrefab);
+            SetField(flow, "chapters", new List<ChapterDefinition> { chapter });
+            SetField(flow, "levelRuntime", runtime);
+            SetField(flow, "buildModeManager", build);
+
+            ShadowCastHeadsetUI ui = gameObject.AddComponent<ShadowCastHeadsetUI>();
+            ui.Initialize(flow, build, camera, this);
+        }
+
+        private ChapterDefinition CreateSampleCampaign()
+        {
+            GameObject cube = blockPrefab != null ? blockPrefab : PrimitiveTemplate("Block", PrimitiveType.Cube, new Color(0.16f, 0.68f, 0.85f));
+            GameObject wedge = rampPrefab != null ? rampPrefab : PrimitiveTemplate("Wedge", PrimitiveType.Cube, new Color(0.98f, 0.56f, 0.22f));
+            GameObject sphere = orbPrefab != null ? orbPrefab : PrimitiveTemplate("Orb", PrimitiveType.Sphere, new Color(0.7f, 0.39f, 0.9f));
+            GameObject lamp = spotlightPrefab != null ? spotlightPrefab : CreateSpotlightTemplate();
+            BlockPrefab = cube; RampPrefab = wedge; OrbPrefab = sphere;
+
+            LevelDefinition level = ScriptableObject.CreateInstance<LevelDefinition>();
+            level.name = "First Light";
+            SetField(level, "id", "first-light"); SetField(level, "displayName", "First Light");
+            SetField(level, "wallWidth", 3.2f); SetField(level, "wallHeight", 2.1f);
+            SetField(level, "characterStartWallLocalPosition", new Vector3(-1.35f, -0.50f, 0.035f));
+            SetField(level, "goalWallLocalPosition", new Vector3(1.30f, -0.50f, 0.035f));
+            SetField(level, "goalSize", new Vector2(0.24f, 0.36f));
+            SetField(level, "allowLightMovement", true);
+            var objects = new List<LevelObjectPlacement>
+            {
+                Placement("Starting Step", cube, new Vector3(-0.92f, -0.72f, -0.52f), new Vector3(0.62f, 0.28f, 0.30f)),
+                Placement("Middle Step", wedge, new Vector3(-0.05f, -0.38f, -0.50f), new Vector3(0.70f, 0.32f, 0.34f)),
+                Placement("Goal Step", cube, new Vector3(0.87f, -0.66f, -0.48f), new Vector3(0.62f, 0.30f, 0.30f)),
+                Placement("Bonus Orb", sphere, new Vector3(0.45f, 0.54f, -0.55f), new Vector3(0.36f, 0.36f, 0.36f))
+            };
+            SetField(level, "objects", objects);
+            SetField(level, "lights", new List<LevelLightPlacement> { LightPlacement(lamp, new Vector3(0f, 0.1f, -2.15f)) });
+
+            ChapterDefinition chapter = ScriptableObject.CreateInstance<ChapterDefinition>();
+            chapter.name = "Tabletop Dawn";
+            SetField(chapter, "id", "tabletop-dawn"); SetField(chapter, "displayName", "Tabletop Dawn");
+            SetField(chapter, "levels", new List<LevelDefinition> { level });
+            return chapter;
+        }
+
+        private GameObject CreateSpotlightTemplate()
+        {
+            GameObject lamp = new GameObject("Sample Spot Light");
+            lamp.transform.SetParent(transform, true);
+            Light spot = lamp.AddComponent<Light>();
+            lamp.transform.position = new Vector3(10000f, 10000f, 10000f);
+            spot.type = LightType.Spot;
+            spot.color = new Color(1f, 0.88f, 0.62f);
+            spot.intensity = 1800f;
+            spot.range = 8f;
+            spot.spotAngle = 65f;
+            spot.shadows = LightShadows.Hard;
+            return lamp;
+        }
+
+        private GameObject PrimitiveTemplate(string name, PrimitiveType type, Color color)
+        {
+            GameObject result = GameObject.CreatePrimitive(type);
+            result.name = name;
+            result.transform.SetParent(transform, true);
+            result.transform.position = new Vector3(10000f, 10000f, 10000f);
+            var material = new Material(Shader.Find("Universal Render Pipeline/Lit") ?? Shader.Find("Standard"));
+            material.color = color;
+            Renderer renderer = result.GetComponent<Renderer>();
+            renderer.sharedMaterial = material;
+            return result;
+        }
+
+        private static LevelObjectPlacement Placement(string id, GameObject prefab, Vector3 position, Vector3 scale)
+        {
+            var item = new LevelObjectPlacement();
+            SetField(item, "placementId", id); SetField(item, "prefab", prefab);
+            SetField(item, "wallLocalPosition", position); SetField(item, "localScale", scale);
+            SetField(item, "wallLocalEulerAngles", Vector3.zero); SetField(item, "movable", true);
+            return item;
+        }
+
+        private static LevelLightPlacement LightPlacement(GameObject prefab, Vector3 position)
+        {
+            var item = new LevelLightPlacement();
+            SetField(item, "prefab", prefab); SetField(item, "wallLocalPosition", position);
+            SetField(item, "wallLocalEulerAngles", Vector3.zero); SetField(item, "movable", true);
+            return item;
+        }
+
+        private static void SetField(object target, string name, object value)
+        {
+            FieldInfo field = target.GetType().GetField(name, BindingFlags.Instance | BindingFlags.NonPublic);
+            if (field != null) field.SetValue(target, value);
+        }
+
+        private static void EnsureEventSystem()
+        {
+            if (EventSystem.current != null) return;
+            GameObject eventSystem = new GameObject("EventSystem");
+            eventSystem.AddComponent<EventSystem>();
+            eventSystem.AddComponent<InputSystemUIInputModule>();
+        }
+    }
+
+    /// <summary>Mirrors controller tracking poses for the existing pinch and two-hand build manipulator.</summary>
+    public sealed class XRControllerAnchorDriver : MonoBehaviour
+    {
+        private Transform rightAnchor, leftAnchor;
+        private BuildModeManager build;
+        private Camera view;
+        private InputDevice rightDevice, leftDevice;
+        private bool configured;
+
+        public void Initialize(Transform right, Transform left, BuildModeManager manager, Camera camera)
+        {
+            rightAnchor = right; leftAnchor = left; build = manager; view = camera;
+        }
+
+        private void Update()
+        {
+            if (!rightDevice.isValid) rightDevice = FindDevice(InputDeviceCharacteristics.Right | InputDeviceCharacteristics.Controller);
+            if (!leftDevice.isValid) leftDevice = FindDevice(InputDeviceCharacteristics.Left | InputDeviceCharacteristics.Controller);
+            Vector3 rightPosition = Vector3.zero, leftPosition = Vector3.zero;
+            Quaternion rightRotation = Quaternion.identity, leftRotation = Quaternion.identity;
+            bool rightTracked = rightDevice.isValid && rightDevice.TryGetFeatureValue(CommonUsages.devicePosition, out rightPosition) && rightDevice.TryGetFeatureValue(CommonUsages.deviceRotation, out rightRotation);
+            bool leftTracked = leftDevice.isValid && leftDevice.TryGetFeatureValue(CommonUsages.devicePosition, out leftPosition) && leftDevice.TryGetFeatureValue(CommonUsages.deviceRotation, out leftRotation);
+            if (rightTracked)
+            {
+                Transform trackingOrigin = view != null ? view.transform.parent : null;
+                if (trackingOrigin != null)
+                {
+                    rightPosition = trackingOrigin.TransformPoint(rightPosition);
+                    rightRotation = trackingOrigin.rotation * rightRotation;
+                }
+                rightAnchor.SetPositionAndRotation(rightPosition, rightRotation);
+                if (!configured)
+                {
+                    build.InputBridge.ConfigureInputAnchors(rightAnchor, leftTracked ? leftAnchor : null, view);
+                    configured = true;
+                }
+            }
+            if (leftTracked)
+            {
+                Transform trackingOrigin = view != null ? view.transform.parent : null;
+                if (trackingOrigin != null)
+                {
+                    leftPosition = trackingOrigin.TransformPoint(leftPosition);
+                    leftRotation = trackingOrigin.rotation * leftRotation;
+                }
+                leftAnchor.SetPositionAndRotation(leftPosition, leftRotation);
+            }
+        }
+
+        private static InputDevice FindDevice(InputDeviceCharacteristics characteristics)
+        {
+            var devices = new List<InputDevice>();
+            InputDevices.GetDevicesWithCharacteristics(characteristics, devices);
+            return devices.Count > 0 ? devices[0] : default;
+        }
+    }
+
+    /// <summary>Gaze plus controller-trigger UI, with a full world-space flow and desktop fallback.</summary>
+    public sealed class ShadowCastHeadsetUI : MonoBehaviour
+    {
+        private const float ArtWidth = 1920f;
+        private const float ArtHeight = 1080f;
+        private CampaignFlowController flow;
+        private BuildModeManager build;
+        private Camera view;
+        private Canvas canvas;
+        private GraphicRaycaster raycaster;
+        private RawImage artwork;
+        private readonly List<Button> hitboxes = new List<Button>();
+        private readonly Dictionary<Button, float> movementHitboxes = new Dictionary<Button, float>();
+        private readonly List<RaycastResult> rayResults = new List<RaycastResult>();
+        private InputDevice rightController;
+        private bool triggerWasDown;
+        private bool toggleWasDown;
+        private bool pickerWasDown;
+        private bool canvasVisible = true;
+        private float screenMoveInput;
+        private WallPlatformerController2D character;
+        private GameObject blockPrefab, rampPrefab, orbPrefab;
+        private CampaignScreen currentScreen;
+
+        public void Initialize(CampaignFlowController controller, BuildModeManager manager, Camera playerCamera, ShadowCastExperienceBootstrap experience)
+        {
+            flow = controller; build = manager; view = playerCamera;
+            if (experience != null)
+            {
+                blockPrefab = experience.BlockPrefab; rampPrefab = experience.RampPrefab; orbPrefab = experience.OrbPrefab;
+            }
+            CreateCanvas();
+            flow.ScreenChanged += OnScreen;
+            flow.MessageChanged += OnMessage;
+            OnScreen(flow.CurrentScreen);
+        }
+
+        private void CreateCanvas()
+        {
+            GameObject go = new GameObject("Figma Screen", typeof(RectTransform), typeof(Canvas), typeof(CanvasScaler), typeof(GraphicRaycaster));
+            go.transform.SetParent(transform, false);
+            go.transform.localScale = Vector3.one * 0.001f;
+            canvas = go.GetComponent<Canvas>(); canvas.renderMode = RenderMode.WorldSpace; canvas.worldCamera = view;
+            canvas.GetComponent<CanvasScaler>().dynamicPixelsPerUnit = 1f;
+            raycaster = go.GetComponent<GraphicRaycaster>();
+            canvas.GetComponent<RectTransform>().sizeDelta = new Vector2(ArtWidth, ArtHeight);
+            GameObject imageObject = new GameObject("Figma Artwork", typeof(RectTransform), typeof(RawImage));
+            imageObject.transform.SetParent(go.transform, false);
+            artwork = imageObject.GetComponent<RawImage>(); artwork.raycastTarget = true;
+            RectTransform imageRect = artwork.rectTransform;
+            imageRect.anchorMin = Vector2.zero; imageRect.anchorMax = Vector2.one;
+            imageRect.offsetMin = Vector2.zero; imageRect.offsetMax = Vector2.zero;
+        }
+
+        private void OnScreen(CampaignScreen screen)
+        {
+            currentScreen = screen;
+            PositionCanvasInView();
+            ClearHitboxes();
+            switch (screen)
+            {
+                case CampaignScreen.MainMenu:
+                    ShowArtwork("Menu Page");
+                    AddHitbox(290, 280, 360, 560, () => flow.OpenChapterSelect());
+                    AddHitbox(660, 310, 550, 290, ShowQuickMode);
+                    AddHitbox(1210, 275, 430, 430, ShowQuickMode);
+                    AddHitbox(1210, 710, 430, 140, () => flow.OpenChapterSelect());
+                    break;
+                case CampaignScreen.ChapterSelect:
+                    ShowArtwork("Chapter Page");
+                    AddHitbox(285, 425, 395, 445, () => flow.SelectChapter(0));
+                    AddHitbox(145, 90, 370, 85, flow.ReturnToMainMenu);
+                    break;
+                case CampaignScreen.LevelSelect:
+                    ShowArtwork("Level Page");
+                    AddHitbox(445, 455, 365, 225, () => flow.SelectLevel(0));
+                    AddHitbox(150, 90, 200, 80, flow.BackToChapterSelect);
+                    break;
+                case CampaignScreen.WallPlacement:
+                    ShowArtwork("Setting a game area");
+                    AddHitbox(215, 245, 1500, 600, PlaceSampleWall);
+                    AddHitbox(135, 145, 290, 95, flow.BackToLevelSelect);
+                    break;
+                case CampaignScreen.Build:
+                    ShowObjectSelection();
+                    break;
+                case CampaignScreen.Baking:
+                    ShowArtwork("Placing object Shadows to create Path");
+                    break;
+                case CampaignScreen.Play:
+                    ShowArtwork("Object shadow Path");
+                    AddHitbox(600, 865, 95, 170, () => { }, -1f);
+                    AddHitbox(695, 865, 105, 170, () => { }, 1f);
+                    AddHitbox(990, 870, 190, 190, () => character?.RequestJump());
+                    AddHitbox(65, 85, 300, 100, flow.ReturnToBuild);
+                    break;
+                case CampaignScreen.LevelComplete:
+                    ShowArtwork("Chapter Page");
+                    AddHitbox(305, 790, 350, 72, flow.ContinueAfterCompletion);
+                    AddHitbox(145, 90, 370, 85, flow.ReturnToMainMenu);
+                    break;
+                case CampaignScreen.LevelFailed:
+                    ShowArtwork("Object shadow Path");
+                    AddHitbox(65, 85, 300, 100, flow.RetryLevel);
+                    AddHitbox(990, 870, 190, 190, () => character?.RequestJump());
+                    break;
+            }
+            canvasVisible = screen != CampaignScreen.Play;
+            canvas.gameObject.SetActive(canvasVisible);
+            if (screen == CampaignScreen.Play) character = FindAnyObjectByType<WallPlatformerController2D>();
+        }
+
+        private void ShowObjectSelection()
+        {
+            ShowArtwork("Selecting Your Objects");
+            AddHitbox(275, 300, 300, 500, () => SpawnAndHide(PrimitiveType.Cube, new Vector3(0.62f, 0.28f, 0.30f), null, -0.82f));
+            AddHitbox(575, 300, 280, 500, () => SpawnAndHide(PrimitiveType.Cube, new Vector3(0.70f, 0.32f, 0.34f), new Vector3(0f, 0f, 22f), -0.42f));
+            AddHitbox(855, 300, 280, 500, () => SpawnAndHide(PrimitiveType.Sphere, Vector3.one * 0.36f, null, 0f));
+            AddHitbox(1135, 300, 285, 500, () => SpawnAndHide(PrimitiveType.Cube, new Vector3(0.62f, 0.30f, 0.30f), null, 0.42f));
+            AddHitbox(1420, 300, 290, 500, () => SpawnAndHide(PrimitiveType.Cube, new Vector3(0.55f, 0.40f, 0.32f), new Vector3(0f, 0f, -18f), 0.82f));
+        }
+
+        private void ShowQuickMode()
+        {
+            ClearHitboxes();
+            currentScreen = CampaignScreen.MainMenu;
+            ShowArtwork("Quick Mode");
+            AddHitbox(500, 425, 280, 470, StartQuickLevel);
+            AddHitbox(820, 425, 280, 470, StartQuickLevel);
+            AddHitbox(1140, 425, 280, 470, StartQuickLevel);
+            AddHitbox(65, 125, 300, 100, flow.ReturnToMainMenu);
+        }
+
+        private void StartQuickLevel()
+        {
+            flow.OpenChapterSelect();
+            flow.SelectChapter(0);
+            flow.SelectLevel(0);
+        }
+
+        private void ShowArtwork(string resourceName)
+        {
+            Texture2D texture = Resources.Load<Texture2D>($"FigmaScreens/{resourceName}");
+            if (texture == null)
+            {
+                Debug.LogError($"Missing supplied Figma screen export: Assets/Resources/FigmaScreens/{resourceName}.png", this);
+                canvas.gameObject.SetActive(false);
+                return;
+            }
+            canvas.gameObject.SetActive(true);
+            artwork.texture = texture;
+            RectTransform rect = canvas.GetComponent<RectTransform>();
+            rect.sizeDelta = new Vector2(ArtWidth, ArtHeight);
+            artwork.uvRect = texture.height > ArtHeight
+                ? new Rect(0f, 1f - ArtHeight / texture.height, 1f, ArtHeight / texture.height)
+                : new Rect(0f, 0f, 1f, 1f);
+        }
+
+        private void AddHitbox(float x, float y, float width, float height, Action action, float movement = 0f)
+        {
+            GameObject target = new GameObject("Figma hotspot", typeof(RectTransform), typeof(Image), typeof(Button));
+            target.transform.SetParent(canvas.transform, false);
+            RectTransform rect = target.GetComponent<RectTransform>();
+            rect.anchorMin = rect.anchorMax = new Vector2(0.5f, 0.5f);
+            rect.pivot = new Vector2(0f, 1f);
+            rect.sizeDelta = new Vector2(width, height);
+            rect.anchoredPosition = new Vector2(x - ArtWidth * 0.5f, ArtHeight * 0.5f - y);
+            Image image = target.GetComponent<Image>(); image.color = new Color(0f, 0f, 0f, 0f); image.raycastTarget = true;
+            Button button = target.GetComponent<Button>(); button.targetGraphic = image;
+            if (action != null) button.onClick.AddListener(() => action());
+            if (movement != 0f) movementHitboxes[button] = movement;
+            hitboxes.Add(button);
+        }
+
+        private void PlaceSampleWall()
+        {
+            Vector3 forward = Vector3.ProjectOnPlane(view.transform.forward, Vector3.up).normalized;
+            if (forward.sqrMagnitude < 0.1f) forward = Vector3.forward;
+            Pose pose = new Pose(view.transform.position + forward * 2.8f, Quaternion.LookRotation(-forward, Vector3.up));
+            flow.ConfirmWallPlacement(pose);
+        }
+
+        private void SpawnPrimitive(PrimitiveType type, Vector3? scale = null, Vector3? rotation = null, float wallX = 0f)
+        {
+            GameObject prefab = rotation.HasValue && rampPrefab != null ? rampPrefab : (type == PrimitiveType.Sphere ? orbPrefab : blockPrefab);
+            GameObject item = prefab != null ? Instantiate(prefab) : GameObject.CreatePrimitive(type);
+            item.name = type == PrimitiveType.Cube ? "Buildable Block" : "Buildable Orb";
+            Transform wall = build.TargetWallPlane;
+            item.transform.position = wall != null
+                ? wall.TransformPoint(new Vector3(wallX, 0f, -0.52f))
+                : view.transform.position + view.transform.forward * 1.8f + view.transform.right * wallX - view.transform.up * 0.12f;
+            item.transform.rotation = rotation.HasValue ? Quaternion.Euler(rotation.Value) : Quaternion.identity;
+            item.transform.localScale = scale ?? (prefab != null ? prefab.transform.localScale * 0.32f : Vector3.one * 0.32f);
+            int casterLayer = LayerMask.NameToLayer("ShadowCaster");
+            SetLayerRecursively(item.transform, casterLayer >= 0 ? casterLayer : 7);
+            if (prefab == null)
+            {
+                var material = new Material(Shader.Find("Universal Render Pipeline/Lit") ?? Shader.Find("Standard"));
+                material.color = type == PrimitiveType.Cube ? new Color(0.16f, 0.68f, 0.85f) : new Color(0.7f, 0.39f, 0.9f);
+                item.GetComponent<Renderer>().sharedMaterial = material;
+            }
+            build.SpawnObject(item, item.transform.position, item.transform.rotation);
+            Destroy(item);
+        }
+
+        private void SpawnAndHide(PrimitiveType type, Vector3 scale, Vector3? rotation, float wallX)
+        {
+            SpawnPrimitive(type, scale, rotation, wallX);
+            SetCanvasVisible(false);
+        }
+
+        private void SetCanvasVisible(bool visible)
+        {
+            canvasVisible = visible;
+            canvas.gameObject.SetActive(visible);
+        }
+
+        private void Update()
+        {
+            if (view == null || canvas == null) return;
+            PollOverlayToggle();
+            if (canvasVisible)
+            {
+                PositionCanvasInView();
+                PollPointer();
+            }
+            if (flow.CurrentScreen == CampaignScreen.Play) PollPlayInput();
+        }
+
+        private void PollOverlayToggle()
+        {
+            Keyboard keyboard = Keyboard.current;
+            bool keyDown = keyboard != null && (keyboard.tabKey.isPressed || keyboard.escapeKey.isPressed);
+            bool pickerDown = keyboard != null && keyboard.pKey.isPressed;
+            bool controllerDown = false;
+            if (!rightController.isValid)
+            {
+                var devices = new List<InputDevice>();
+                InputDevices.GetDevicesWithCharacteristics(InputDeviceCharacteristics.Right | InputDeviceCharacteristics.Controller, devices);
+                if (devices.Count > 0) rightController = devices[0];
+            }
+            if (rightController.isValid)
+            {
+                rightController.TryGetFeatureValue(CommonUsages.menuButton, out controllerDown);
+                if (rightController.TryGetFeatureValue(CommonUsages.secondaryButton, out bool secondaryButton))
+                    pickerDown |= secondaryButton;
+            }
+            bool down = keyDown || controllerDown;
+            if (pickerDown && !pickerWasDown && flow.CurrentScreen == CampaignScreen.Build)
+            {
+                ClearHitboxes();
+                ShowObjectSelection();
+                SetCanvasVisible(true);
+            }
+            if (down && !toggleWasDown)
+            {
+                if (flow.CurrentScreen == CampaignScreen.Build || flow.CurrentScreen == CampaignScreen.Play)
+                {
+                    if (!canvasVisible)
+                    {
+                        if (flow.CurrentScreen == CampaignScreen.Build)
+                        {
+                            ClearHitboxes();
+                            ShowArtwork("Adjusting Your Game Ground");
+                            AddHitbox(1580, 80, 340, 150, flow.BakeLevel);
+                            AddHitbox(300, 80, 440, 150, flow.BackToLevelSelect);
+                        }
+                        SetCanvasVisible(true);
+                    }
+                    else SetCanvasVisible(false);
+                }
+            }
+            toggleWasDown = down;
+            pickerWasDown = pickerDown;
+        }
+
+        private void PositionCanvasInView()
+        {
+            Transform cameraTransform = view.transform;
+            canvas.transform.position = cameraTransform.position + cameraTransform.forward * 1.35f;
+            canvas.transform.rotation = Quaternion.LookRotation(cameraTransform.forward, cameraTransform.up);
+        }
+
+        private void PollPointer()
+        {
+            if (!rightController.isValid)
+            {
+                var devices = new List<InputDevice>(); InputDevices.GetDevicesWithCharacteristics(InputDeviceCharacteristics.Right | InputDeviceCharacteristics.Controller, devices);
+                if (devices.Count > 0) rightController = devices[0];
+            }
+            bool trigger = rightController.isValid && rightController.TryGetFeatureValue(CommonUsages.triggerButton, out bool pressed) && pressed;
+            Mouse mouse = Mouse.current;
+            Keyboard keyboard = Keyboard.current;
+            bool mouseClick = mouse != null && mouse.leftButton.wasPressedThisFrame;
+            bool mouseDown = mouse != null && mouse.leftButton.isPressed;
+            bool keyboardClick = keyboard != null && (keyboard.enterKey.wasPressedThisFrame || keyboard.numpadEnterKey.wasPressedThisFrame || keyboard.spaceKey.wasPressedThisFrame);
+            bool pointerDown = trigger || mouseDown;
+            bool click = (trigger && !triggerWasDown) || mouseClick || keyboardClick;
+            triggerWasDown = trigger;
+            Vector2 pointerPosition = mouseClick || mouseDown ? mouse.position.ReadValue() : new Vector2(Screen.width * .5f, Screen.height * .5f);
+            rayResults.Clear();
+            var pointer = new PointerEventData(EventSystem.current) { position = pointerPosition };
+            raycaster.Raycast(pointer, rayResults);
+            Button hovered = null;
+            for (int i = 0; i < rayResults.Count; i++)
+            {
+                Button button = rayResults[i].gameObject.GetComponentInParent<Button>();
+                if (button != null && button.interactable) { hovered = button; break; }
+            }
+            if (click && hovered != null) hovered.onClick.Invoke();
+            else if (click && currentScreen == CampaignScreen.Build) SetCanvasVisible(false);
+            screenMoveInput = currentScreen == CampaignScreen.Play && pointerDown && hovered != null && movementHitboxes.TryGetValue(hovered, out float movement)
+                ? movement
+                : 0f;
+        }
+
+        private void PollPlayInput()
+        {
+            if (character == null) character = FindAnyObjectByType<WallPlatformerController2D>();
+            if (character == null) return;
+            float axis = 0f;
+            Keyboard keyboard = Keyboard.current;
+            if (keyboard != null)
+            {
+                if (keyboard.aKey.isPressed || keyboard.leftArrowKey.isPressed) axis -= 1f;
+                if (keyboard.dKey.isPressed || keyboard.rightArrowKey.isPressed) axis += 1f;
+            }
+            bool jump = keyboard != null && (keyboard.spaceKey.wasPressedThisFrame || keyboard.wKey.wasPressedThisFrame || keyboard.upArrowKey.wasPressedThisFrame);
+            var devices = new List<InputDevice>(); InputDevices.GetDevicesWithCharacteristics(InputDeviceCharacteristics.Left | InputDeviceCharacteristics.Controller, devices);
+            if (devices.Count > 0)
+            {
+                if (devices[0].TryGetFeatureValue(CommonUsages.primary2DAxis, out Vector2 stick)) axis = Mathf.Abs(stick.x) > 0.15f ? stick.x : 0f;
+            }
+            if (Mathf.Abs(screenMoveInput) > 0.01f) axis = screenMoveInput;
+            var rightDevices = new List<InputDevice>(); InputDevices.GetDevicesWithCharacteristics(InputDeviceCharacteristics.Right | InputDeviceCharacteristics.Controller, rightDevices);
+            if (rightDevices.Count > 0 && rightDevices[0].TryGetFeatureValue(CommonUsages.primaryButton, out bool a) && a) jump = true;
+            character.SetMovementInput(axis);
+            if (jump) character.RequestJump();
+        }
+
+        private void ClearHitboxes()
+        {
+            foreach (Button button in hitboxes) if (button != null) Destroy(button.gameObject);
+            hitboxes.Clear();
+            movementHitboxes.Clear();
+        }
+        private static void SetLayerRecursively(Transform target, int layer)
+        {
+            target.gameObject.layer = layer;
+            for (int i = 0; i < target.childCount; i++) SetLayerRecursively(target.GetChild(i), layer);
+        }
+        private void OnMessage(string message) { Debug.Log(message, this); }
+        private void OnDestroy() { if (flow != null) { flow.ScreenChanged -= OnScreen; flow.MessageChanged -= OnMessage; } }
+    }
+}
