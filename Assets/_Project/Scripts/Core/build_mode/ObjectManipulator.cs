@@ -80,6 +80,7 @@ namespace ShadowCast.Core.BuildMode
         public event Action<GameObject> OnObjectGrabbed;
         public event Action<GameObject> OnObjectReleased;
         public event Action<GameObject> OnObjectDeletedByShake;
+        public event Action<string> OnManipulationBlocked;
 
         public bool IsGrabbing => _grabbedObject != null;
         public GameObject GrabbedObject => _grabbedObject;
@@ -130,7 +131,7 @@ namespace ShadowCast.Core.BuildMode
             {
                 if (!lightManip.AllowLightMovement)
                 {
-                    // Dev disabled light movement for this level
+                    OnManipulationBlocked?.Invoke("This lamp is fixed and cannot be moved.");
                     return false;
                 }
                 _grabbedLight = lightManip;
@@ -141,6 +142,7 @@ namespace ShadowCast.Core.BuildMode
                 _grabbedBuildable = target.GetComponentInParent<BuildableObject>();
                 if (_grabbedBuildable != null && _grabbedBuildable.IsLocked)
                 {
+                    OnManipulationBlocked?.Invoke("This object is fixed and cannot be moved.");
                     return false;
                 }
                 _grabbedObject = _grabbedBuildable != null ? _grabbedBuildable.gameObject : target;

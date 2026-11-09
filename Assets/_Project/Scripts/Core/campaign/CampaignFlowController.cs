@@ -33,6 +33,10 @@ namespace ShadowCast.Core.Campaign
         private Pose confirmedWallPose;
         private CampaignScreen currentScreen = CampaignScreen.MainMenu;
         private bool buildEventsRegistered;
+        private int hintsUsed;
+        private int currentScore;
+        private int lastAwardedScore;
+        private int lastBestScore;
 
         private void OnValidate()
         {
@@ -57,6 +61,8 @@ namespace ShadowCast.Core.Campaign
         public event Action<CampaignScreen> ScreenChanged;
         public event Action<string> MessageChanged;
         public event Action ProgressChanged;
+        public event Action<int, int> RunScoreChanged;
+        public event Action<string> HintRevealed;
 
         public IReadOnlyList<ChapterDefinition> Chapters => chapters;
         public CampaignProgressStore Progress => progressStore;
@@ -65,6 +71,12 @@ namespace ShadowCast.Core.Campaign
         public LevelDefinition SelectedLevel => selectedLevel;
         public int SelectedChapterIndex => selectedChapterIndex;
         public int SelectedLevelIndex => selectedLevelIndex;
+        public int CurrentScore => currentScore;
+        public int HintsUsed => hintsUsed;
+        public int RemainingHints => selectedLevel != null ? Mathf.Max(0, selectedLevel.Hints.Count - hintsUsed) : 0;
+        public int LastAwardedScore => lastAwardedScore;
+        public int LastBestScore => lastBestScore;
+        public int TotalScore => progressStore != null ? progressStore.TotalScore : 0;
 
         private void Awake()
         {
@@ -121,6 +133,7 @@ namespace ShadowCast.Core.Campaign
             selectedLevel = selectedChapter.Levels[levelIndex];
             if (selectedLevel == null) return false;
             selectedLevelIndex = levelIndex;
+            PrepareLevelScore();
             progressStore.RecordLastSelection(selectedChapter.Id, selectedLevel.Id);
             SetScreen(CampaignScreen.WallPlacement);
             return true;
@@ -149,6 +162,7 @@ namespace ShadowCast.Core.Campaign
                     if (level == null || level.Id != progressStore.LastLevelId) continue;
                     selectedLevel = level;
                     selectedLevelIndex = levelIndex;
+                    PrepareLevelScore();
                     ProgressChanged?.Invoke();
                     SetScreen(CampaignScreen.WallPlacement);
                     return true;
@@ -164,6 +178,24 @@ namespace ShadowCast.Core.Campaign
         }
 
         public bool SaveLocalProgress() => progressStore != null && progressStore.SaveToDisk();
+
+        /// <summary>Reveals the next authored hint and applies its penalty once for this level attempt.</summary>
+        public bool UseHint()
+        {
+            if (selectedLevel == null || (currentScreen != CampaignScreen.Build && currentScreen != CampaignScreen.Play)) return false;
+            if (hintsUsed >= selectedLevel.Hints.Count)
+            {
+                MessageChanged?.Invoke("No more hints are available for this level.");
+                return false;
+            }
+
+            string hint = selectedLevel.Hints[hintsUsed];
+            hintsUsed++;
+            currentScore = CalculateCurrentScore();
+            RunScoreChanged?.Invoke(currentScore, selectedLevel.BaseScore);
+            HintRevealed?.Invoke($"HINT {hintsUsed}/{selectedLevel.Hints.Count}\n{hint}");
+            return true;
+        }
 
         public void ConfirmWallPlacement(Pose wallPose)
         {
@@ -200,7 +232,8 @@ namespace ShadowCast.Core.Campaign
         {
             if (currentScreen != CampaignScreen.Play || selectedLevel == null) return;
             selectedLevel.MechanicHooks?.levelCompleted?.Invoke();
-            progressStore.MarkCompleted(selectedLevel.Id);
+            lastAwardedScore = currentScore;
+            lastBestScore = progressStore.RecordCompletion(selectedLevel.Id, lastAwardedScore);
             ProgressChanged?.Invoke();
             SetScreen(CampaignScreen.LevelComplete);
         }
@@ -285,6 +318,21 @@ namespace ShadowCast.Core.Campaign
         private void HandleBakeStateChanged(BakeState state)
         {
             if (state == BakeState.Baking) SetScreen(CampaignScreen.Baking);
+        }
+
+        private void PrepareLevelScore()
+        {
+            hintsUsed = 0;
+            lastAwardedScore = 0;
+            lastBestScore = progressStore != null && selectedLevel != null ? progressStore.GetBestScore(selectedLevel.Id) : 0;
+            currentScore = CalculateCurrentScore();
+            RunScoreChanged?.Invoke(currentScore, selectedLevel != null ? selectedLevel.BaseScore : 0);
+        }
+
+        private int CalculateCurrentScore()
+        {
+            if (selectedLevel == null) return 0;
+            return Mathf.Max(selectedLevel.MinimumScore, selectedLevel.BaseScore - hintsUsed * selectedLevel.HintPenalty);
         }
 
         private void HandleBakeCompleted(Vector3 spawnPosition)

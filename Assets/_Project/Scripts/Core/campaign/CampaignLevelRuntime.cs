@@ -59,7 +59,7 @@ namespace ShadowCast.Core.Campaign
             CreateObjects(level);
             CreateLights(level);
             CreateGoal(level);
-            bool primaryLightMovable = level.AllowLightMovement && lightManipulators.Count > 0 && lightManipulators[0].AllowLightMovement;
+            bool primaryLightMovable = lightManipulators.Count > 0 && lightManipulators[0].AllowLightMovement;
             buildModeManager.ConfigureForLevel(wall, wallBaker, levelLights.Count > 0 ? levelLights[0] : null, primaryLightMovable);
             level.MechanicHooks?.levelLoaded?.Invoke();
             return true;
@@ -200,9 +200,13 @@ namespace ShadowCast.Core.Campaign
                     continue;
                 }
 
+                light.type = placement.LightType == CampaignLightType.Directional
+                    ? LightType.Directional
+                    : LightType.Point;
+
                 LightSourceManipulator manipulator = instance.GetComponent<LightSourceManipulator>();
                 if (manipulator == null) manipulator = instance.AddComponent<LightSourceManipulator>();
-                manipulator.AllowLightMovement = level.AllowLightMovement && placement.Movable;
+                manipulator.AllowLightMovement = placement.Movable;
                 levelLights.Add(light);
                 lightManipulators.Add(manipulator);
             }

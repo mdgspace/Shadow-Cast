@@ -45,6 +45,42 @@ namespace ShadowCast.EditorTools
         [MenuItem("GameObject/Shadow Cast/Power-up/Dash", false, 41)]
         private static void CreateDashPowerup() => CreatePowerup(CharacterAbilityType.Dash);
 
+        [MenuItem("GameObject/Shadow Cast/Lamp/Point Light", false, 50)]
+        private static void CreatePointLamp() => CreateLamp(LightType.Point);
+
+        [MenuItem("GameObject/Shadow Cast/Lamp/Directional Light", false, 51)]
+        private static void CreateDirectionalLamp() => CreateLamp(LightType.Directional);
+
+        private static void CreateLamp(LightType type)
+        {
+            PrimitiveType bodyType = type == LightType.Point ? PrimitiveType.Sphere : PrimitiveType.Cube;
+            GameObject lamp = GameObject.CreatePrimitive(bodyType);
+            lamp.name = type == LightType.Point ? "Point Lamp" : "Directional Lamp";
+            lamp.transform.localScale = type == LightType.Point
+                ? Vector3.one * 0.22f
+                : new Vector3(0.28f, 0.18f, 0.42f);
+
+            Light light = lamp.AddComponent<Light>();
+            light.type = type;
+            light.shadows = LightShadows.Hard;
+            light.color = type == LightType.Point ? new Color(1f, 0.82f, 0.55f) : new Color(0.72f, 0.86f, 1f);
+            if (type == LightType.Point)
+            {
+                light.range = 6f;
+                light.intensity = 1000f;
+            }
+            else
+            {
+                light.intensity = 1.2f;
+            }
+
+            lamp.AddComponent<LightSourceManipulator>();
+            ApplyColor(lamp, type == LightType.Point
+                ? new Color(1f, 0.55f, 0.12f)
+                : new Color(0.15f, 0.55f, 1f));
+            FinishCreation(lamp, $"Create {lamp.name}", "Default");
+        }
+
         private static void CreatePowerup(CharacterAbilityType ability)
         {
             GameObject powerup = GameObject.CreatePrimitive(PrimitiveType.Sphere);

@@ -1,5 +1,6 @@
 using System;
 using UnityEngine;
+using UnityEngine.Serialization;
 
 namespace ShadowCast.Core.BuildMode
 {
@@ -11,8 +12,9 @@ namespace ShadowCast.Core.BuildMode
     public class LightSourceManipulator : MonoBehaviour
     {
         [Header("Level Design Configuration")]
-        [Tooltip("Developer toggle: enable/disable moving this light source for this level.")]
-        [SerializeField] private bool _allowLightMovement = true;
+        [Tooltip("When disabled, this lamp still casts light but cannot be moved or rotated by the player.")]
+        [FormerlySerializedAs("_allowLightMovement")]
+        [SerializeField] private bool _isMovable = true;
 
         [Header("Light References")]
         [SerializeField] private Light _lightComponent;
@@ -27,16 +29,18 @@ namespace ShadowCast.Core.BuildMode
 
         public bool AllowLightMovement
         {
-            get => _allowLightMovement;
+            get => _isMovable;
             set
             {
-                if (_allowLightMovement != value)
+                if (_isMovable != value)
                 {
-                    _allowLightMovement = value;
-                    OnLightMovementToggled?.Invoke(_allowLightMovement);
+                    _isMovable = value;
+                    OnLightMovementToggled?.Invoke(_isMovable);
                 }
             }
         }
+
+        public bool IsMovable => _isMovable;
 
         public Light LightComponent => _lightComponent != null ? _lightComponent : (_lightComponent = GetComponentInChildren<Light>());
         public Vector3 LightExtents => _lightExtents;
@@ -55,7 +59,7 @@ namespace ShadowCast.Core.BuildMode
         /// </summary>
         public void SetPose(Vector3 position, Quaternion rotation)
         {
-            if (!_allowLightMovement) return;
+            if (!_isMovable) return;
 
             transform.position = position;
             transform.rotation = rotation;
@@ -66,7 +70,7 @@ namespace ShadowCast.Core.BuildMode
         {
             if (_visualHandle != null)
             {
-                _visualHandle.gameObject.SetActive(_allowLightMovement);
+                _visualHandle.gameObject.SetActive(_isMovable);
             }
         }
     }

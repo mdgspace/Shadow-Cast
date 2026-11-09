@@ -17,6 +17,9 @@ namespace ShadowCast.Core.Campaign
     /// <summary>Starts the complete sample campaign in any scene containing a MainCamera.</summary>
     public sealed class ShadowCastExperienceBootstrap : MonoBehaviour
     {
+        [Header("Campaign (leave empty to use the generated sample)")]
+        [SerializeField] private List<ChapterDefinition> campaignChapters = new List<ChapterDefinition>();
+
         [Header("Optional replaceable model prefabs (unit sized)")]
         [SerializeField] private GameObject blockPrefab;
         [SerializeField] private GameObject rampPrefab;
@@ -60,10 +63,13 @@ namespace ShadowCast.Core.Campaign
             anchors.Initialize(rightAnchor, leftAnchor, build, camera);
             CampaignLevelRuntime runtime = gameObject.AddComponent<CampaignLevelRuntime>();
             CampaignFlowController flow = gameObject.AddComponent<CampaignFlowController>();
-            ChapterDefinition chapter = CreateSampleCampaign();
+            List<ChapterDefinition> activeChapters = new List<ChapterDefinition>();
+            for (int i = 0; i < campaignChapters.Count; i++)
+                if (campaignChapters[i] != null) activeChapters.Add(campaignChapters[i]);
+            if (activeChapters.Count == 0) activeChapters.Add(CreateSampleCampaign());
             SetField(runtime, "characterPrefab", characterPrefab);
             SetField(runtime, "goalPrefab", goalPrefab);
-            SetField(flow, "chapters", new List<ChapterDefinition> { chapter });
+            SetField(flow, "chapters", activeChapters);
             SetField(flow, "levelRuntime", runtime);
             SetField(flow, "buildModeManager", build);
 
@@ -88,7 +94,15 @@ namespace ShadowCast.Core.Campaign
             SetField(level, "characterStartWallLocalPosition", new Vector3(-1.35f, -0.50f, 0.035f));
             SetField(level, "goalWallLocalPosition", new Vector3(1.30f, -0.50f, 0.035f));
             SetField(level, "goalSize", new Vector2(0.24f, 0.36f));
-            SetField(level, "allowLightMovement", true);
+            SetField(level, "baseScore", 1000);
+            SetField(level, "minimumScore", 200);
+            SetField(level, "hintPenalty", 200);
+            SetField(level, "hints", new List<string>
+            {
+                "Start by making one continuous shadow path from the blob toward the middle of the wall.",
+                "Rotate the wedge so its shadow becomes a climbable ramp instead of a vertical obstacle.",
+                "The final platform only needs to bring the blob close enough to touch the green exit."
+            });
             var objects = new List<LevelObjectPlacement>
             {
                 Placement("Starting Step", cube, new Vector3(-0.92f, -0.72f, -0.52f), new Vector3(0.62f, 0.28f, 0.30f)),

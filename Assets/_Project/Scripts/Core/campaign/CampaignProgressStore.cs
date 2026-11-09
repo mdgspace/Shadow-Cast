@@ -12,14 +12,22 @@ namespace ShadowCast.Core.Campaign
         public bool reducedMotion;
     }
 
+    [Serializable]
+    public sealed class LevelScoreRecord
+    {
+        public string levelId;
+        public int bestScore;
+    }
+
     /// <summary>Versioned, atomic local persistence for campaign progress, resume state and player settings.</summary>
     public sealed class CampaignProgressStore : MonoBehaviour
     {
         [Serializable]
         private sealed class SaveData
         {
-            public int version = 2;
+            public int version = 3;
             public List<string> completedLevelIds = new List<string>();
+            public List<LevelScoreRecord> levelScores = new List<LevelScoreRecord>();
             public string lastChapterId;
             public string lastLevelId;
             public string savedAtUtc;
@@ -38,6 +46,17 @@ namespace ShadowCast.Core.Campaign
         public string LocalSavePath => SavePath;
         public bool HasSave => File.Exists(SavePath);
         public DateTime? LastSavedAtUtc => DateTime.TryParse(data.savedAtUtc, out DateTime value) ? value : null;
+        public int TotalScore
+        {
+            get
+            {
+                EnsureDataIntegrity();
+                int total = 0;
+                for (int i = 0; i < data.levelScores.Count; i++)
+                    if (data.levelScores[i] != null) total += Mathf.Max(0, data.levelScores[i].bestScore);
+                return total;
+            }
+        }
 
         private void Awake() => LoadFromDisk();
 
@@ -67,6 +86,46 @@ namespace ShadowCast.Core.Campaign
             if (string.IsNullOrWhiteSpace(levelId) || data.completedLevelIds.Contains(levelId)) return;
             data.completedLevelIds.Add(levelId);
             SaveToDisk();
+        }
+
+        public int GetBestScore(string levelId)
+        {
+            if (string.IsNullOrWhiteSpace(levelId)) return 0;
+            EnsureDataIntegrity();
+            for (int i = 0; i < data.levelScores.Count; i++)
+            {
+                LevelScoreRecord record = data.levelScores[i];
+                if (record != null && record.levelId == levelId) return Mathf.Max(0, record.bestScore);
+            }
+            return 0;
+        }
+
+        /// <summary>Completes a level and stores only its highest result, so repeat plays cannot farm the total.</summary>
+        public int RecordCompletion(string levelId, int score)
+        {
+            if (string.IsNullOrWhiteSpace(levelId)) return 0;
+            EnsureDataIntegrity();
+            if (!data.completedLevelIds.Contains(levelId)) data.completedLevelIds.Add(levelId);
+
+            int clampedScore = Mathf.Max(0, score);
+            LevelScoreRecord existing = null;
+            for (int i = 0; i < data.levelScores.Count; i++)
+            {
+                if (data.levelScores[i] != null && data.levelScores[i].levelId == levelId)
+                {
+                    existing = data.levelScores[i];
+                    break;
+                }
+            }
+
+            if (existing == null)
+            {
+                existing = new LevelScoreRecord { levelId = levelId };
+                data.levelScores.Add(existing);
+            }
+            existing.bestScore = Mathf.Max(existing.bestScore, clampedScore);
+            SaveToDisk();
+            return existing.bestScore;
         }
 
         public void RecordLastSelection(string chapterId, string levelId)
@@ -175,8 +234,15 @@ namespace ShadowCast.Core.Campaign
         {
             if (data == null) data = new SaveData();
             if (data.completedLevelIds == null) data.completedLevelIds = new List<string>();
+            if (data.levelScores == null) data.levelScores = new List<LevelScoreRecord>();
             if (data.settings == null) data.settings = new ShadowCastPlayerSettings();
-            data.version = 2;
+            for (int i = data.levelScores.Count - 1; i >= 0; i--)
+            {
+                LevelScoreRecord record = data.levelScores[i];
+                if (record == null || string.IsNullOrWhiteSpace(record.levelId)) data.levelScores.RemoveAt(i);
+                else record.bestScore = Mathf.Max(0, record.bestScore);
+            }
+            data.version = 3;
         }
 
         private void ApplySettings() => AudioListener.volume = Mathf.Clamp01(data.settings.masterVolume);

@@ -1,6 +1,7 @@
 using System;
 using UnityEngine;
 using UnityEngine.UI;
+using ShadowCast.Core.BuildMode;
 
 namespace ShadowCast.Core.Campaign
 {
@@ -18,20 +19,33 @@ namespace ShadowCast.Core.Campaign
         private Camera view;
         private Canvas canvas;
         private GameObject gameplayRoot;
+        private GameObject scoreHintRoot;
         private GameObject continueRoot;
         private GameObject pauseRoot;
         private GameObject pausePage;
         private GameObject settingsPage;
+        private GameObject hintPanel;
+        private GameObject completionRoot;
+        private GameObject warningPanel;
         private Text doubleJumpLabel;
         private Text dashLabel;
+        private Text scoreLabel;
+        private Text hintLabel;
+        private Text completionLabel;
+        private Text warningLabel;
         private Text settingsSummary;
         private Text statusLabel;
+        private Button hintButton;
         private WallPlatformerController2D character;
+        private ObjectManipulator objectManipulator;
         private float previousTimeScale = 1f;
+        private float hideHintAt;
+        private float hideWarningAt;
 
         public bool IsPaused { get; private set; }
         public bool HasInteractiveUI => canvas != null && canvas.gameObject.activeInHierarchy &&
-            ((gameplayRoot != null && gameplayRoot.activeInHierarchy) || (continueRoot != null && continueRoot.activeInHierarchy) ||
+            ((gameplayRoot != null && gameplayRoot.activeInHierarchy) || (scoreHintRoot != null && scoreHintRoot.activeInHierarchy) ||
+             (continueRoot != null && continueRoot.activeInHierarchy) ||
              (pauseRoot != null && pauseRoot.activeInHierarchy));
 
         public void Initialize(CampaignFlowController controller, Camera playerCamera)
@@ -40,7 +54,14 @@ namespace ShadowCast.Core.Campaign
             progress = flow != null ? flow.Progress : null;
             view = playerCamera;
             BuildUI();
-            if (flow != null) flow.ScreenChanged += HandleScreenChanged;
+            objectManipulator = FindAnyObjectByType<ObjectManipulator>();
+            if (objectManipulator != null) objectManipulator.OnManipulationBlocked += ShowManipulationWarning;
+            if (flow != null)
+            {
+                flow.ScreenChanged += HandleScreenChanged;
+                flow.RunScoreChanged += HandleRunScoreChanged;
+                flow.HintRevealed += HandleHintRevealed;
+            }
             if (progress != null)
             {
                 progress.Saved += HandleSaved;
@@ -51,13 +72,19 @@ namespace ShadowCast.Core.Campaign
 
         private void OnDestroy()
         {
-            if (flow != null) flow.ScreenChanged -= HandleScreenChanged;
+            if (flow != null)
+            {
+                flow.ScreenChanged -= HandleScreenChanged;
+                flow.RunScoreChanged -= HandleRunScoreChanged;
+                flow.HintRevealed -= HandleHintRevealed;
+            }
             if (progress != null)
             {
                 progress.Saved -= HandleSaved;
                 progress.Loaded -= RefreshSettings;
             }
             BindCharacter(null);
+            if (objectManipulator != null) objectManipulator.OnManipulationBlocked -= ShowManipulationWarning;
             if (IsPaused) ApplyPaused(false);
         }
 
@@ -65,6 +92,10 @@ namespace ShadowCast.Core.Campaign
         {
             if (flow != null && flow.CurrentScreen == CampaignScreen.Play && character == null)
                 BindCharacter(FindAnyObjectByType<WallPlatformerController2D>());
+            if (hintPanel != null && hintPanel.activeSelf && Time.unscaledTime >= hideHintAt)
+                hintPanel.SetActive(false);
+            if (warningPanel != null && warningPanel.activeSelf && Time.unscaledTime >= hideWarningAt)
+                warningPanel.SetActive(false);
         }
 
         private void LateUpdate()
@@ -92,6 +123,8 @@ namespace ShadowCast.Core.Campaign
             IsPaused = paused;
             if (pauseRoot != null) pauseRoot.SetActive(paused);
             if (gameplayRoot != null) gameplayRoot.SetActive(!paused && flow != null && flow.CurrentScreen == CampaignScreen.Play);
+            if (scoreHintRoot != null) scoreHintRoot.SetActive(!paused && flow != null &&
+                (flow.CurrentScreen == CampaignScreen.Build || flow.CurrentScreen == CampaignScreen.Play));
             if (paused)
             {
                 previousTimeScale = Mathf.Approximately(Time.timeScale, 0f) ? 1f : Time.timeScale;
@@ -113,8 +146,53 @@ namespace ShadowCast.Core.Campaign
             if (IsPaused) ApplyPaused(false);
             bool playing = screen == CampaignScreen.Play;
             if (gameplayRoot != null) gameplayRoot.SetActive(playing);
+            if (scoreHintRoot != null) scoreHintRoot.SetActive(screen == CampaignScreen.Build || playing);
             if (continueRoot != null) continueRoot.SetActive(screen == CampaignScreen.MainMenu && progress != null && progress.HasSave);
+            if (completionRoot != null) completionRoot.SetActive(screen == CampaignScreen.LevelComplete);
+            if (hintPanel != null) hintPanel.SetActive(false);
+            RefreshScoreDisplay();
+            if (screen == CampaignScreen.LevelComplete) RefreshCompletionDisplay();
             if (!playing) BindCharacter(null);
+        }
+
+        private void HandleRunScoreChanged(int score, int maximum) => RefreshScoreDisplay();
+
+        private void HandleHintRevealed(string message)
+        {
+            if (hintLabel == null || hintPanel == null) return;
+            hintLabel.text = message;
+            hintPanel.SetActive(true);
+            hideHintAt = Time.unscaledTime + 8f;
+            RefreshScoreDisplay();
+        }
+
+        private void ShowManipulationWarning(string message)
+        {
+            if (warningPanel == null || warningLabel == null) return;
+            warningLabel.text = string.IsNullOrWhiteSpace(message) ? "This item cannot be moved." : message;
+            warningPanel.SetActive(true);
+            hideWarningAt = Time.unscaledTime + 2.5f;
+        }
+
+        private void RefreshScoreDisplay()
+        {
+            if (scoreLabel != null)
+                scoreLabel.text = flow != null ? $"LEVEL SCORE   {flow.CurrentScore:N0}" : "LEVEL SCORE   0";
+            if (hintButton == null || flow == null) return;
+            hintButton.interactable = flow.RemainingHints > 0;
+            Text label = hintButton.GetComponentInChildren<Text>();
+            if (label != null)
+            {
+                int penalty = flow.SelectedLevel != null ? flow.SelectedLevel.HintPenalty : 0;
+                label.text = flow.RemainingHints > 0 ? $"HINT  (−{penalty:N0})" : "NO MORE HINTS";
+            }
+        }
+
+        private void RefreshCompletionDisplay()
+        {
+            if (completionLabel == null || flow == null) return;
+            completionLabel.text =
+                $"LEVEL COMPLETE\n\nSCORE   {flow.LastAwardedScore:N0}\nBEST   {flow.LastBestScore:N0}\nTOTAL   {flow.TotalScore:N0}";
         }
 
         private void BindCharacter(WallPlatformerController2D target)
@@ -161,12 +239,34 @@ namespace ShadowCast.Core.Campaign
             Image abilityPanel = CreateRect("Ability Charges", gameplayRoot.transform, new Vector2(365f, 275f), new Vector2(430f, 112f), new Color(0.025f, 0.04f, 0.07f, 0.86f));
             doubleJumpLabel = CreateText("Double Jump Uses", abilityPanel.transform, new Vector2(0f, 25f), new Vector2(390f, 42f), "DOUBLE JUMP   × 0", 25, TextAnchor.MiddleLeft);
             dashLabel = CreateText("Dash Uses", abilityPanel.transform, new Vector2(0f, -24f), new Vector2(390f, 42f), "DASH   × 0", 25, TextAnchor.MiddleLeft);
+            scoreHintRoot = CreateRect("Score & Hints", canvasObject.transform, Vector2.zero, new Vector2(Width, Height), Color.clear).gameObject;
+            Image scorePanel = CreateRect("Score", scoreHintRoot.transform, new Vector2(0f, 300f), new Vector2(330f, 58f), new Color(0.025f, 0.04f, 0.07f, 0.86f));
+            scoreLabel = CreateText("Current Score", scorePanel.transform, Vector2.zero, new Vector2(300f, 44f), "LEVEL SCORE   0", 24, TextAnchor.MiddleCenter);
             CreateButton("Jump Button", gameplayRoot.transform, new Vector2(390f, -265f), new Vector2(170f, 74f), "JUMP", Cyan, () => character?.RequestJump());
             CreateButton("Dash Button", gameplayRoot.transform, new Vector2(205f, -265f), new Vector2(170f, 74f), "DASH", Pink, () => character?.RequestDash());
+            hintButton = CreateButton("Hint Button", scoreHintRoot.transform, new Vector2(-330f, -265f), new Vector2(250f, 74f), "HINT", new Color(1f, 0.72f, 0.24f), RequestHint);
             CreateButton("Pause Button", gameplayRoot.transform, new Vector2(-500f, 300f), new Vector2(150f, 54f), "PAUSE", new Color(0.5f, 0.58f, 0.7f), TogglePause);
+
+            Image hintBackground = CreateRect("Hint Panel", scoreHintRoot.transform, new Vector2(0f, 120f), new Vector2(720f, 170f), PanelColor);
+            hintPanel = hintBackground.gameObject;
+            hintBackground.raycastTarget = false;
+            hintLabel = CreateText("Hint Text", hintPanel.transform, Vector2.zero, new Vector2(660f, 140f), string.Empty, 25, TextAnchor.MiddleCenter);
+            hintPanel.SetActive(false);
 
             continueRoot = CreateRect("Continue Save Overlay", canvasObject.transform, Vector2.zero, new Vector2(Width, Height), Color.clear).gameObject;
             CreateButton("Continue Local Save", continueRoot.transform, new Vector2(0f, -292f), new Vector2(360f, 58f), "CONTINUE LOCAL SAVE", new Color(0.4f, 0.72f, 1f), () => flow?.ContinueFromLocalSave());
+
+            completionRoot = CreateRect("Score Result Overlay", canvasObject.transform, Vector2.zero, new Vector2(Width, Height), Color.clear).gameObject;
+            Image completionPanel = CreateRect("Score Result", completionRoot.transform, new Vector2(300f, 50f), new Vector2(430f, 290f), PanelColor);
+            completionPanel.raycastTarget = false;
+            completionLabel = CreateText("Score Result Text", completionPanel.transform, Vector2.zero, new Vector2(390f, 250f), string.Empty, 28, TextAnchor.MiddleCenter);
+            completionRoot.SetActive(false);
+
+            Image warningBackground = CreateRect("Locked Item Warning", canvasObject.transform, new Vector2(0f, -190f), new Vector2(650f, 82f), new Color(0.55f, 0.12f, 0.12f, 0.96f));
+            warningPanel = warningBackground.gameObject;
+            warningBackground.raycastTarget = false;
+            warningLabel = CreateText("Warning Text", warningPanel.transform, Vector2.zero, new Vector2(610f, 62f), string.Empty, 24, TextAnchor.MiddleCenter);
+            warningPanel.SetActive(false);
 
             pauseRoot = CreateRect("Pause Overlay", canvasObject.transform, Vector2.zero, new Vector2(Width, Height), new Color(0f, 0f, 0f, 0.62f)).gameObject;
             Image menuPanel = CreateRect("Pause Panel", pauseRoot.transform, Vector2.zero, new Vector2(620f, 610f), PanelColor);
@@ -191,6 +291,17 @@ namespace ShadowCast.Core.Campaign
             statusLabel = CreateText("Save Status", menuPanel.transform, new Vector2(0f, -260f), new Vector2(520f, 36f), string.Empty, 18, TextAnchor.MiddleCenter);
             pauseRoot.SetActive(false);
             settingsPage.SetActive(false);
+        }
+
+        private void RequestHint()
+        {
+            if (flow == null || flow.UseHint()) return;
+            if (hintLabel != null && hintPanel != null)
+            {
+                hintLabel.text = "No more hints are available for this level.";
+                hintPanel.SetActive(true);
+                hideHintAt = Time.unscaledTime + 4f;
+            }
         }
 
         private void ShowPausePage()
