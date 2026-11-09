@@ -2,6 +2,7 @@ using System;
 using System.Collections;
 using System.Collections.Generic;
 using UnityEngine;
+using ShadowCast.Core.Campaign;
 
 namespace ShadowCast.Core.BuildMode
 {
@@ -41,6 +42,7 @@ namespace ShadowCast.Core.BuildMode
         // State tracking
         private BakeState _currentState = BakeState.Idle;
         private readonly List<BuildableObject> _activeBakedObjects = new List<BuildableObject>();
+        private readonly List<MovingShadowPlatform> _activeMovingShadows = new List<MovingShadowPlatform>();
         private Vector3 _calculatedCharacterSpawnPos = Vector3.zero;
         private Vector3? _requestedCharacterSpawnPos;
 
@@ -139,6 +141,10 @@ namespace ShadowCast.Core.BuildMode
                 _shadowWallBaker.ClearBakedPlatforms();
             }
 
+            for (int i = 0; i < _activeMovingShadows.Count; i++)
+                if (_activeMovingShadows[i] != null) _activeMovingShadows[i].RestoreBuildState();
+            _activeMovingShadows.Clear();
+
             // Restore interactions and layers on all active build objects
             for (int i = 0; i < _activeBakedObjects.Count; i++)
             {
@@ -163,6 +169,16 @@ namespace ShadowCast.Core.BuildMode
 
             EnsureDependencies();
             _activeBakedObjects.Clear();
+            _activeMovingShadows.Clear();
+
+            MovingShadowPlatform[] movingShadows = FindObjectsByType<MovingShadowPlatform>(FindObjectsInactive.Exclude);
+            for (int i = 0; i < movingShadows.Length; i++)
+            {
+                MovingShadowPlatform moving = movingShadows[i];
+                if (moving == null || !moving.gameObject.activeInHierarchy) continue;
+                moving.PrepareForBake(_targetWallPlane);
+                _activeMovingShadows.Add(moving);
+            }
 
             // 1. Determine shadow caster layer from ShadowWallBaker
             int casterLayer = 7; // Default shadow caster layer
@@ -212,7 +228,14 @@ namespace ShadowCast.Core.BuildMode
                 }
             }
 
-            if (!bakeSucceeded)
+            bool movingShadowSucceeded = false;
+            for (int i = 0; i < _activeMovingShadows.Count; i++)
+                if (_activeMovingShadows[i] != null)
+                    movingShadowSucceeded |= _activeMovingShadows[i].CreateBakedShadow(_targetWallPlane);
+
+            CreateTrapProxies();
+
+            if (!bakeSucceeded && !movingShadowSucceeded)
             {
                 _requestedCharacterSpawnPos = null;
                 Unbake();
@@ -231,6 +254,33 @@ namespace ShadowCast.Core.BuildMode
             _currentState = BakeState.BakedPlayActive;
             OnBakeStateChanged?.Invoke(_currentState);
             OnBakeCompleted?.Invoke(_calculatedCharacterSpawnPos);
+        }
+
+        private void CreateTrapProxies()
+        {
+            if (_targetWallPlane == null) return;
+            Transform root = _targetWallPlane.Find("BakedShadowPlatforms") ?? _targetWallPlane;
+            for (int i = 0; i < _activeBakedObjects.Count; i++)
+            {
+                BuildableObject buildable = _activeBakedObjects[i];
+                if (buildable == null || !buildable.IsTrap) continue;
+
+                GameObject trap = new GameObject($"TrapShadow_{buildable.name}");
+                trap.transform.SetParent(root, false);
+                Vector3 localPosition = _targetWallPlane.InverseTransformPoint(buildable.transform.position);
+                localPosition.z = -0.006f;
+                trap.transform.localPosition = localPosition;
+
+                Vector3 extents = buildable.GetExtents();
+                Vector3 wallScale = _targetWallPlane.lossyScale;
+                Vector2 size = new Vector2(
+                    Mathf.Max(0.05f, extents.x * 2f / Mathf.Max(0.0001f, Mathf.Abs(wallScale.x))),
+                    Mathf.Max(0.05f, extents.y * 2f / Mathf.Max(0.0001f, Mathf.Abs(wallScale.y))));
+                BoxCollider2D trigger = trap.AddComponent<BoxCollider2D>();
+                trigger.isTrigger = true;
+                trigger.size = size;
+                trap.AddComponent<ShadowTrapHazard>();
+            }
         }
 
         private Vector3 CalculateCharacterSpawnPoint()

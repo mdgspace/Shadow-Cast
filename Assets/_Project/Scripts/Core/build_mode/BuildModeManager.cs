@@ -158,6 +158,7 @@ namespace ShadowCast.Core.BuildMode
                     if (!_activeObjects.Contains(existing[i]))
                     {
                         _activeObjects.Add(existing[i]);
+                        GroundObjectIfNeeded(existing[i]);
                     }
                 }
             }
@@ -281,6 +282,7 @@ namespace ShadowCast.Core.BuildMode
                 Vector3 clamped = _boundingVolume.ClampPosition(instance.transform.position, buildable.GetExtents());
                 instance.transform.position = clamped;
             }
+            GroundObjectIfNeeded(buildable);
 
             _activeObjects.Add(buildable);
             SelectObject(buildable);
@@ -369,7 +371,20 @@ namespace ShadowCast.Core.BuildMode
         {
             if (buildable == null) return;
             buildable.SetMovable(movable);
+            GroundObjectIfNeeded(buildable);
             if (!_activeObjects.Contains(buildable)) _activeObjects.Add(buildable);
+        }
+
+        private void GroundObjectIfNeeded(BuildableObject buildable)
+        {
+            if (buildable == null || !buildable.GravityEnabled) return;
+            Vector3 extents = buildable.GetExtents();
+            Vector3 position = buildable.transform.position;
+            if (_snapEngine == null || !_snapEngine.TryConstrainToGround(position, extents, buildable.transform, out Vector3 grounded))
+                grounded = _boundingVolume != null ? _boundingVolume.ConstrainToGround(position, extents) : position;
+            buildable.transform.position = _boundingVolume != null
+                ? _boundingVolume.ClampPosition(grounded, extents)
+                : grounded;
         }
 
         /// <summary>Clears runtime object registrations between independently authored levels.</summary>

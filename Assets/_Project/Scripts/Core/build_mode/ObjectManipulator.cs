@@ -239,6 +239,16 @@ namespace ShadowCast.Core.BuildMode
                 _boundingVolume.EvaluateProximity(targetPosition, extents);
             }
 
+            // "Gravity Enabled" is an authoring constraint, not Rigidbody simulation.
+            // Keep the base on the nearest support, with the build-area floor as a reliable fallback.
+            if (_grabbedBuildable != null && _grabbedBuildable.GravityEnabled)
+            {
+                if (_snapEngine == null || !_snapEngine.TryConstrainToGround(targetPosition, extents, _grabbedBuildable.transform, out Vector3 grounded))
+                    grounded = _boundingVolume != null ? _boundingVolume.ConstrainToGround(targetPosition, extents) : targetPosition;
+                targetPosition = grounded;
+                if (_boundingVolume != null) targetPosition = _boundingVolume.ClampPosition(targetPosition, extents);
+            }
+
             // Apply calculated pose
             if (_grabbedLight != null)
             {

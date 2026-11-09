@@ -233,11 +233,11 @@ namespace ShadowCast.Core.BuildMode
 
             if (_rightDevice.isValid)
             {
-                if (_rightDevice.TryGetFeatureValue(CommonUsages.triggerButton, out bool trigger) && trigger)
+                if (_rightDevice.TryGetFeatureValue(UnityEngine.XR.CommonUsages.triggerButton, out bool trigger) && trigger)
                 {
                     return true;
                 }
-                if (_rightDevice.TryGetFeatureValue(CommonUsages.gripButton, out bool grip) && grip)
+                if (_rightDevice.TryGetFeatureValue(UnityEngine.XR.CommonUsages.gripButton, out bool grip) && grip)
                 {
                     return true;
                 }
@@ -265,7 +265,7 @@ namespace ShadowCast.Core.BuildMode
 
             if (_leftDevice.isValid)
             {
-                if (_leftDevice.TryGetFeatureValue(CommonUsages.primaryButton, out bool btn) && btn)
+                if (_leftDevice.TryGetFeatureValue(UnityEngine.XR.CommonUsages.primaryButton, out bool btn) && btn)
                 {
                     _undoRedo?.Undo();
                 }

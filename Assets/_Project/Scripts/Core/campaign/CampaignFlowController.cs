@@ -121,9 +121,49 @@ namespace ShadowCast.Core.Campaign
             selectedLevel = selectedChapter.Levels[levelIndex];
             if (selectedLevel == null) return false;
             selectedLevelIndex = levelIndex;
+            progressStore.RecordLastSelection(selectedChapter.Id, selectedLevel.Id);
             SetScreen(CampaignScreen.WallPlacement);
             return true;
         }
+
+        /// <summary>Reloads the local file and resumes at the saved level's wall-placement step.</summary>
+        public bool ContinueFromLocalSave()
+        {
+            if (progressStore == null || !progressStore.LoadFromDisk())
+            {
+                MessageChanged?.Invoke("No local save was found yet.");
+                return false;
+            }
+
+            if (levelRuntime != null) levelRuntime.ClearLevel();
+
+            for (int chapterIndex = 0; chapterIndex < chapters.Count; chapterIndex++)
+            {
+                ChapterDefinition chapter = chapters[chapterIndex];
+                if (chapter == null || chapter.Id != progressStore.LastChapterId) continue;
+                selectedChapter = chapter;
+                selectedChapterIndex = chapterIndex;
+                for (int levelIndex = 0; levelIndex < chapter.Levels.Count; levelIndex++)
+                {
+                    LevelDefinition level = chapter.Levels[levelIndex];
+                    if (level == null || level.Id != progressStore.LastLevelId) continue;
+                    selectedLevel = level;
+                    selectedLevelIndex = levelIndex;
+                    ProgressChanged?.Invoke();
+                    SetScreen(CampaignScreen.WallPlacement);
+                    return true;
+                }
+                SetScreen(CampaignScreen.LevelSelect);
+                ProgressChanged?.Invoke();
+                return true;
+            }
+
+            MessageChanged?.Invoke("The saved level is not available in this campaign build.");
+            ProgressChanged?.Invoke();
+            return false;
+        }
+
+        public bool SaveLocalProgress() => progressStore != null && progressStore.SaveToDisk();
 
         public void ConfirmWallPlacement(Pose wallPose)
         {

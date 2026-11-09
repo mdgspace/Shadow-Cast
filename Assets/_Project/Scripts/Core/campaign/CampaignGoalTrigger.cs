@@ -17,7 +17,7 @@ namespace ShadowCast.Core.Campaign
 
         private void OnTriggerEnter2D(Collider2D other)
         {
-            if (flowController == null || other.GetComponent<WallPlatformerController2D>() == null) return;
+            if (flowController == null || other.GetComponentInParent<WallPlatformerController2D>() == null) return;
             if (conditionComponent != null)
             {
                 if (!(conditionComponent is ICampaignGoalCondition condition) || !condition.CanCompleteLevel) return;

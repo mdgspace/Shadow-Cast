@@ -21,6 +21,7 @@ namespace ShadowCast.Core.Campaign
         private ShadowWallBaker wallBaker;
         private readonly List<Light> levelLights = new List<Light>();
         private readonly List<LightSourceManipulator> lightManipulators = new List<LightSourceManipulator>();
+        private readonly List<LevelKeyPickup> levelKeys = new List<LevelKeyPickup>();
         private GameObject character;
         private LevelDefinition currentLevel;
 
@@ -111,6 +112,7 @@ namespace ShadowCast.Core.Campaign
             wallBaker = null;
             levelLights.Clear();
             lightManipulators.Clear();
+            levelKeys.Clear();
             if (runtimeRoot != null) Destroy(runtimeRoot.gameObject);
             runtimeRoot = null;
         }
@@ -152,10 +154,27 @@ namespace ShadowCast.Core.Campaign
                 GameObject instance = Instantiate(placement.Prefab, position, rotation, runtimeRoot);
                 instance.name = string.IsNullOrWhiteSpace(placement.PlacementId) ? placement.Prefab.name : placement.PlacementId;
                 instance.transform.localScale = placement.LocalScale;
+                LevelKeyPickup key = instance.GetComponent<LevelKeyPickup>();
+                if (key != null)
+                {
+                    SetLayerRecursively(instance.transform, 0);
+                    levelKeys.Add(key);
+                    continue;
+                }
+
+                if (instance.GetComponent<CharacterAbilityPowerup>() != null)
+                {
+                    SetLayerRecursively(instance.transform, 0);
+                    continue;
+                }
+
                 SetLayerRecursively(instance.transform, casterLayer);
+                if (instance.GetComponent<MovingShadowPlatform>() != null)
+                    continue;
+
                 BuildableObject buildable = instance.GetComponent<BuildableObject>();
                 if (buildable == null) buildable = instance.AddComponent<BuildableObject>();
-                buildModeManager.RegisterLevelObject(buildable, placement.Movable);
+                buildModeManager.RegisterLevelObject(buildable, placement.Movable && buildable.IsMovable);
                 levelObjects.Add(buildable);
             }
         }
@@ -228,30 +247,33 @@ namespace ShadowCast.Core.Campaign
                 if (condition == null)
                     Debug.LogWarning($"Goal condition prefab on level '{level.Id}' has no component implementing ICampaignGoalCondition.", this);
             }
+
+            if (levelKeys.Count > 0)
+            {
+                KeyedExitCondition keyedExit = goal.GetComponent<KeyedExitCondition>();
+                if (keyedExit == null) keyedExit = goal.AddComponent<KeyedExitCondition>();
+                keyedExit.Configure(levelKeys, condition);
+                condition = keyedExit;
+            }
             goal.AddComponent<CampaignGoalTrigger>().Configure(flowController, condition);
         }
 
         private GameObject CreatePrimitiveCharacter(Vector3 position)
         {
-            GameObject player = GameObject.CreatePrimitive(PrimitiveType.Capsule);
-            player.name = "TemporaryCampaignCharacter";
+            GameObject player = new GameObject("Campaign Blob");
+            player.SetActive(false);
             player.transform.SetParent(runtimeRoot, true);
             player.transform.SetPositionAndRotation(position, wall.rotation);
-            player.transform.localScale = new Vector3(0.18f, 0.24f, 0.06f);
-            Renderer playerRenderer = player.GetComponent<Renderer>();
-            if (playerRenderer != null)
-            {
-                Material material = new Material(Shader.Find("Universal Render Pipeline/Lit") ?? Shader.Find("Standard"));
-                material.color = new Color(0.95f, 0.38f, 0.72f);
-                playerRenderer.sharedMaterial = material;
-            }
-            Collider collider = player.GetComponent<Collider>();
-            if (collider != null) Destroy(collider);
             Rigidbody2D body = player.AddComponent<Rigidbody2D>();
             body.freezeRotation = true;
-            body.gravityScale = 3f;
-            CapsuleCollider2D capsule = player.AddComponent<CapsuleCollider2D>();
-            capsule.size = new Vector2(0.85f, 0.95f);
+            body.gravityScale = 2.4f;
+            body.collisionDetectionMode = CollisionDetectionMode2D.Continuous;
+            player.AddComponent<MeshFilter>();
+            player.AddComponent<MeshRenderer>();
+            SoftBlob blob = player.AddComponent<SoftBlob>();
+            blob.ConfigureForCampaign(0.13f);
+            player.AddComponent<BlobController>();
+            player.SetActive(true);
             return player;
         }
 

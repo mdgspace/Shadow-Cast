@@ -129,6 +129,22 @@ namespace ShadowCast.Core.BuildMode
             }
         }
 
+        /// <summary>Places an object on the bottom face of the configured build area.</summary>
+        public Vector3 ConstrainToGround(Vector3 targetWorldPos, Vector3 objectExtents)
+        {
+            if (_useOrientedBounds)
+            {
+                Vector3 localPosition = transform.InverseTransformPoint(targetWorldPos);
+                Vector3 localExtents = transform.InverseTransformVector(objectExtents);
+                localExtents = new Vector3(Mathf.Abs(localExtents.x), Mathf.Abs(localExtents.y), Mathf.Abs(localExtents.z));
+                localPosition.y = _center.y - (_size.y * 0.5f) + localExtents.y;
+                return transform.TransformPoint(localPosition);
+            }
+
+            targetWorldPos.y = Center.y - (_size.y * 0.5f) + objectExtents.y;
+            return targetWorldPos;
+        }
+
         /// <summary>
         /// Evaluates proximity of an object to each bounding face.
         /// Activates boundary visual feedback and fires haptic hit events if threshold reached.

@@ -8,6 +8,9 @@ using UnityEngine.InputSystem.UI;
 using UnityEngine.UI;
 using UnityEngine.XR;
 using ShadowCast.Core.BuildMode;
+using InputDevice = UnityEngine.XR.InputDevice;
+using InputDevices = UnityEngine.XR.InputDevices;
+using CommonUsages = UnityEngine.XR.CommonUsages;
 
 namespace ShadowCast.Core.Campaign
 {
@@ -65,7 +68,9 @@ namespace ShadowCast.Core.Campaign
             SetField(flow, "buildModeManager", build);
 
             ShadowCastHeadsetUI ui = gameObject.AddComponent<ShadowCastHeadsetUI>();
-            ui.Initialize(flow, build, camera, this);
+            CampaignGameplayHUD gameplayHud = gameObject.AddComponent<CampaignGameplayHUD>();
+            gameplayHud.Initialize(flow, camera);
+            ui.Initialize(flow, build, camera, this, gameplayHud);
         }
 
         private ChapterDefinition CreateSampleCampaign()
@@ -236,15 +241,18 @@ namespace ShadowCast.Core.Campaign
         private bool triggerWasDown;
         private bool toggleWasDown;
         private bool pickerWasDown;
+        private bool jumpWasDown;
+        private bool dashWasDown;
         private bool canvasVisible = true;
         private float screenMoveInput;
         private WallPlatformerController2D character;
+        private CampaignGameplayHUD gameplayHud;
         private GameObject blockPrefab, rampPrefab, orbPrefab;
         private CampaignScreen currentScreen;
 
-        public void Initialize(CampaignFlowController controller, BuildModeManager manager, Camera playerCamera, ShadowCastExperienceBootstrap experience)
+        public void Initialize(CampaignFlowController controller, BuildModeManager manager, Camera playerCamera, ShadowCastExperienceBootstrap experience, CampaignGameplayHUD hud)
         {
-            flow = controller; build = manager; view = playerCamera;
+            flow = controller; build = manager; view = playerCamera; gameplayHud = hud;
             if (experience != null)
             {
                 blockPrefab = experience.BlockPrefab; rampPrefab = experience.RampPrefab; orbPrefab = experience.OrbPrefab;
@@ -439,20 +447,21 @@ namespace ShadowCast.Core.Campaign
         {
             if (view == null || canvas == null) return;
             PollOverlayToggle();
-            if (canvasVisible)
+            if (canvasVisible || (gameplayHud != null && gameplayHud.HasInteractiveUI))
             {
-                PositionCanvasInView();
+                if (canvasVisible) PositionCanvasInView();
                 PollPointer();
             }
-            if (flow.CurrentScreen == CampaignScreen.Play) PollPlayInput();
+            if (flow.CurrentScreen == CampaignScreen.Play && (gameplayHud == null || !gameplayHud.IsPaused)) PollPlayInput();
         }
 
         private void PollOverlayToggle()
         {
             Keyboard keyboard = Keyboard.current;
-            bool keyDown = keyboard != null && (keyboard.tabKey.isPressed || keyboard.escapeKey.isPressed);
+            bool overlayKeyDown = keyboard != null && keyboard.tabKey.isPressed;
+            bool pauseKeyDown = keyboard != null && keyboard.escapeKey.isPressed;
             bool pickerDown = keyboard != null && keyboard.pKey.isPressed;
-            bool controllerDown = false;
+            bool menuButtonDown = false;
             if (!rightController.isValid)
             {
                 var devices = new List<InputDevice>();
@@ -461,18 +470,23 @@ namespace ShadowCast.Core.Campaign
             }
             if (rightController.isValid)
             {
-                rightController.TryGetFeatureValue(CommonUsages.menuButton, out controllerDown);
+                rightController.TryGetFeatureValue(CommonUsages.menuButton, out menuButtonDown);
                 if (rightController.TryGetFeatureValue(CommonUsages.secondaryButton, out bool secondaryButton))
                     pickerDown |= secondaryButton;
             }
-            bool down = keyDown || controllerDown;
+            bool pauseDown = pauseKeyDown || (flow.CurrentScreen == CampaignScreen.Play && menuButtonDown);
+            bool overlayDown = overlayKeyDown || (flow.CurrentScreen == CampaignScreen.Build && menuButtonDown);
             if (pickerDown && !pickerWasDown && flow.CurrentScreen == CampaignScreen.Build)
             {
                 ClearHitboxes();
                 ShowObjectSelection();
                 SetCanvasVisible(true);
             }
-            if (down && !toggleWasDown)
+            if (pauseDown && !toggleWasDown)
+            {
+                gameplayHud?.TogglePause();
+            }
+            else if (overlayDown && !toggleWasDown)
             {
                 if (flow.CurrentScreen == CampaignScreen.Build || flow.CurrentScreen == CampaignScreen.Play)
                 {
@@ -490,7 +504,7 @@ namespace ShadowCast.Core.Campaign
                     else SetCanvasVisible(false);
                 }
             }
-            toggleWasDown = down;
+            toggleWasDown = pauseDown || overlayDown;
             pickerWasDown = pickerDown;
         }
 
@@ -520,7 +534,7 @@ namespace ShadowCast.Core.Campaign
             Vector2 pointerPosition = mouseClick || mouseDown ? mouse.position.ReadValue() : new Vector2(Screen.width * .5f, Screen.height * .5f);
             rayResults.Clear();
             var pointer = new PointerEventData(EventSystem.current) { position = pointerPosition };
-            raycaster.Raycast(pointer, rayResults);
+            EventSystem.current.RaycastAll(pointer, rayResults);
             Button hovered = null;
             for (int i = 0; i < rayResults.Count; i++)
             {
@@ -545,7 +559,8 @@ namespace ShadowCast.Core.Campaign
                 if (keyboard.aKey.isPressed || keyboard.leftArrowKey.isPressed) axis -= 1f;
                 if (keyboard.dKey.isPressed || keyboard.rightArrowKey.isPressed) axis += 1f;
             }
-            bool jump = keyboard != null && (keyboard.spaceKey.wasPressedThisFrame || keyboard.wKey.wasPressedThisFrame || keyboard.upArrowKey.wasPressedThisFrame);
+            bool jumpDown = keyboard != null && (keyboard.spaceKey.isPressed || keyboard.wKey.isPressed || keyboard.upArrowKey.isPressed);
+            bool dashDown = keyboard != null && (keyboard.leftShiftKey.isPressed || keyboard.rightShiftKey.isPressed || keyboard.eKey.isPressed);
             var devices = new List<InputDevice>(); InputDevices.GetDevicesWithCharacteristics(InputDeviceCharacteristics.Left | InputDeviceCharacteristics.Controller, devices);
             if (devices.Count > 0)
             {
@@ -553,9 +568,17 @@ namespace ShadowCast.Core.Campaign
             }
             if (Mathf.Abs(screenMoveInput) > 0.01f) axis = screenMoveInput;
             var rightDevices = new List<InputDevice>(); InputDevices.GetDevicesWithCharacteristics(InputDeviceCharacteristics.Right | InputDeviceCharacteristics.Controller, rightDevices);
-            if (rightDevices.Count > 0 && rightDevices[0].TryGetFeatureValue(CommonUsages.primaryButton, out bool a) && a) jump = true;
+            if (rightDevices.Count > 0)
+            {
+                if (rightDevices[0].TryGetFeatureValue(CommonUsages.primaryButton, out bool a) && a) jumpDown = true;
+                if (rightDevices[0].TryGetFeatureValue(CommonUsages.secondaryButton, out bool b) && b) dashDown = true;
+            }
             character.SetMovementInput(axis);
-            if (jump) character.RequestJump();
+            if (jumpDown && !jumpWasDown) character.RequestJump();
+            else if (!jumpDown && jumpWasDown) character.ReleaseJump();
+            if (dashDown && !dashWasDown) character.RequestDash();
+            jumpWasDown = jumpDown;
+            dashWasDown = dashDown;
         }
 
         private void ClearHitboxes()

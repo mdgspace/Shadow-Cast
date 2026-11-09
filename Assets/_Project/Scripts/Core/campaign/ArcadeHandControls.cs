@@ -23,6 +23,8 @@ namespace ShadowCast.Core.Campaign
 
         public void SetMovementInput(float value) => character?.SetMovementInput(value);
         public void Jump() => character?.RequestJump();
+        public void ReleaseJump() => character?.ReleaseJump();
+        public void Dash() => character?.RequestDash();
 
         public void RecenterToCurrentHandPose()
         {

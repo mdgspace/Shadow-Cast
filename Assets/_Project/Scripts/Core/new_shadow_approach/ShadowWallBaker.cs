@@ -230,7 +230,7 @@ public class ShadowWallBaker : MonoBehaviour
     /// Can be invoked via Inspector button, ContextMenu, UI Button, or C# script.
     /// </summary>
     [ContextMenu("Bake Shadows")]
-    public void Bake()
+    public bool Bake()
     {
         float startTime = Time.realtimeSinceStartup;
 
@@ -238,7 +238,7 @@ public class ShadowWallBaker : MonoBehaviour
         if (wall == null || wall.sharedMesh == null)
         {
             Debug.LogError("[ShadowWallBaker] Cannot bake: Target wall MeshFilter is missing or has no mesh assigned!", this);
-            return;
+            return false;
         }
 
         InitializeMaterials();
@@ -248,7 +248,7 @@ public class ShadowWallBaker : MonoBehaviour
         if (snapshot == null)
         {
             Debug.LogError("[ShadowWallBaker] Snapshot capture failed!", this);
-            return;
+            return false;
         }
 
         ReplaceSnapshot(snapshot);
@@ -296,6 +296,7 @@ public class ShadowWallBaker : MonoBehaviour
         lastBakeDurationMs = (Time.realtimeSinceStartup - startTime) * 1000f;
 
         Debug.Log($"[ShadowWallBaker] Bake Complete in {lastBakeDurationMs:F1}ms! Generated: {bakedCrispCount} Crisp Solid Platforms, {bakedSoftCount} Soft Quicksand Platforms.");
+        return bakedCrispCount > 0 || bakedSoftCount > 0;
     }
 
     /// <summary>

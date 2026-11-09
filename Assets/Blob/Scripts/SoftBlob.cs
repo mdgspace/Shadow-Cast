@@ -60,6 +60,40 @@ public class SoftBlob : MonoBehaviour
 
     int TotalPoints => nodeCount * smoothing;
 
+    /// <summary>Call before the object is activated to size a runtime-created campaign Blob.</summary>
+    public void ConfigureForCampaign(float configuredRadius)
+    {
+        radius = Mathf.Max(0.04f, configuredRadius);
+        nodeRadius = radius * 0.13f;
+        outlineWidth = radius * 0.08f;
+    }
+
+    /// <summary>Teleports the complete soft body without leaving its spring nodes behind.</summary>
+    public void ResetAt(Vector2 position)
+    {
+        if (core == null) core = GetComponent<Rigidbody2D>();
+        Vector2 delta = position - core.position;
+        core.position = position;
+        core.linearVelocity = Vector2.zero;
+        if (nodes == null) return;
+        for (int i = 0; i < nodes.Length; i++)
+        {
+            if (nodes[i] == null) continue;
+            nodes[i].position += delta;
+            nodes[i].linearVelocity = Vector2.zero;
+            nodes[i].angularVelocity = 0f;
+        }
+        UpdateCentroid();
+    }
+
+    public void SetGravityScale(float gravityScale)
+    {
+        if (core != null) core.gravityScale = gravityScale;
+        if (nodes == null) return;
+        for (int i = 0; i < nodes.Length; i++)
+            if (nodes[i] != null) nodes[i].gravityScale = gravityScale;
+    }
+
     void Awake()
     {
         SetupCore();
@@ -108,9 +142,11 @@ public class SoftBlob : MonoBehaviour
             GameObject go = new GameObject("Node" + i);
             go.layer = gameObject.layer;
             go.transform.position = (Vector2)transform.position + dir * radius;
+            go.transform.SetParent(transform, true);
 
             Rigidbody2D rb = go.AddComponent<Rigidbody2D>();
             rb.mass = nodeMass;
+            rb.gravityScale = core.gravityScale;
             rb.interpolation = RigidbodyInterpolation2D.Interpolate;
             rb.collisionDetectionMode = CollisionDetectionMode2D.Continuous;
             CircleCollider2D cc = go.AddComponent<CircleCollider2D>();

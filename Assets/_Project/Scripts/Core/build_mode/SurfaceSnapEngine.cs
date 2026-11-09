@@ -56,6 +56,13 @@ namespace ShadowCast.Core.BuildMode
         [Tooltip("Maximum allowed angle deviation from cardinal normal to trigger surface snap (degrees).")]
         [SerializeField] private float _cardinalAngleThreshold = 25.0f;
 
+        [Header("Grounded Object Constraint")]
+        [Tooltip("How far below a grounded object to search for a supporting floor, furniture top, or other object.")]
+        [SerializeField, Min(0.1f)] private float _groundProbeDistance = 10f;
+
+        [Tooltip("Tiny gap above the supporting surface to avoid collider overlap and jitter.")]
+        [SerializeField, Min(0f)] private float _groundClearance = 0.002f;
+
         [Header("Optional Grid Snapping")]
         [SerializeField] private bool _enableGridSnap = false;
         [SerializeField] private GridTranslationIncrement _translationIncrement = GridTranslationIncrement.FiveCentimeters;
@@ -169,6 +176,37 @@ namespace ShadowCast.Core.BuildMode
             UpdateVisualHelper(result);
             OnSnapStateChanged?.Invoke(result);
             return result;
+        }
+
+        /// <summary>
+        /// Forces a placement onto the highest upward-facing support below it. Unlike proximity
+        /// snapping, this searches the full configured distance so grounded objects cannot float.
+        /// </summary>
+        public bool TryConstrainToGround(Vector3 candidatePosition, Vector3 extents, Transform ignoredRoot, out Vector3 groundedPosition)
+        {
+            groundedPosition = candidatePosition;
+            float verticalExtent = Mathf.Max(0.001f, extents.y);
+            Vector3 origin = candidatePosition + Vector3.up * (verticalExtent + 0.05f);
+            float distance = _groundProbeDistance + verticalExtent + 0.05f;
+            RaycastHit[] hits = Physics.RaycastAll(origin, Vector3.down, distance, _roomSurfaceLayerMask, QueryTriggerInteraction.Ignore);
+
+            bool found = false;
+            float closestDistance = float.MaxValue;
+            RaycastHit bestHit = default;
+            for (int i = 0; i < hits.Length; i++)
+            {
+                RaycastHit hit = hits[i];
+                if (hit.collider == null || Vector3.Dot(hit.normal, Vector3.up) < 0.5f) continue;
+                if (ignoredRoot != null && (hit.collider.transform == ignoredRoot || hit.collider.transform.IsChildOf(ignoredRoot))) continue;
+                if (hit.distance >= closestDistance) continue;
+                closestDistance = hit.distance;
+                bestHit = hit;
+                found = true;
+            }
+
+            if (!found) return false;
+            groundedPosition.y = bestHit.point.y + verticalExtent + _groundClearance;
+            return true;
         }
 
         private SurfaceType ClassifySurface(Vector3 normal, Collider collider)

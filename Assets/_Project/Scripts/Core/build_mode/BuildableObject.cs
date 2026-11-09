@@ -12,9 +12,18 @@ namespace ShadowCast.Core.BuildMode
         [Header("Object Bounds")]
         [SerializeField] private Vector3 _customExtents = Vector3.zero;
 
-        [Header("State")]
-        [SerializeField] private bool _isLocked = false;
+        [Header("Level Designer Attributes")]
+        [Tooltip("When disabled this object can still be selected, but cannot be moved or rotated.")]
         [SerializeField] private bool _isMovable = true;
+
+        [Tooltip("Keeps this object resting on a floor, furniture, another object, or the bottom of the build area. It cannot float while being placed.")]
+        [SerializeField] private bool _gravityEnabled;
+
+        [Tooltip("Turns the object's projected play-space area into a lethal hazard after baking.")]
+        [SerializeField] private bool _isTrap;
+
+        [Header("Runtime State")]
+        [SerializeField] private bool _isLocked = false;
 
         private int _originalLayer;
         private Collider[] _colliders;
@@ -28,6 +37,8 @@ namespace ShadowCast.Core.BuildMode
         }
 
         public bool IsMovable => _isMovable;
+        public bool GravityEnabled => _gravityEnabled;
+        public bool IsTrap => _isTrap;
 
         public void SetMovable(bool movable)
         {
@@ -43,6 +54,28 @@ namespace ShadowCast.Core.BuildMode
             _colliders = GetComponentsInChildren<Collider>(true);
             _renderers = GetComponentsInChildren<Renderer>(true);
             _rigidbody = GetComponent<Rigidbody>();
+            ApplyAuthoringSettings();
+        }
+
+        private void OnValidate()
+        {
+            ApplyAuthoringSettings();
+        }
+
+        private void Reset()
+        {
+            _isMovable = true;
+            _gravityEnabled = false;
+            _isTrap = false;
+            ApplyAuthoringSettings();
+        }
+
+        /// <summary>Grounding is placement-driven; conventional Rigidbody gravity is deliberately disabled.</summary>
+        public void ApplyAuthoringSettings()
+        {
+            if (_rigidbody == null) _rigidbody = GetComponent<Rigidbody>();
+            if (_rigidbody != null)
+                _rigidbody.useGravity = false;
         }
 
         /// <summary>
@@ -109,7 +142,7 @@ namespace ShadowCast.Core.BuildMode
 
             if (_rigidbody != null)
             {
-                _rigidbody.isKinematic = !enabled;
+                _rigidbody.isKinematic = _gravityEnabled || !enabled;
             }
 
             // Disable/enable non-trigger colliders if needed
