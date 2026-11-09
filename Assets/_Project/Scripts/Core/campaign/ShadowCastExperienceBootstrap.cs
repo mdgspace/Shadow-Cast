@@ -7,6 +7,9 @@ using UnityEngine.InputSystem;
 using UnityEngine.InputSystem.UI;
 using UnityEngine.UI;
 using UnityEngine.XR;
+using Oculus.Interaction.Input;
+using HandFinger = Oculus.Interaction.Input.HandFinger;
+using Hand = Oculus.Interaction.Input.Hand;
 using ShadowCast.Core.BuildMode;
 using InputDevice = UnityEngine.XR.InputDevice;
 using InputDevices = UnityEngine.XR.InputDevices;
@@ -57,9 +60,9 @@ namespace ShadowCast.Core.Campaign
             EnsureEventSystem();
             BuildModeManager build = FindAnyObjectByType<BuildModeManager>();
             if (build == null) build = gameObject.AddComponent<BuildModeManager>();
-            XRControllerAnchorDriver anchors = gameObject.AddComponent<XRControllerAnchorDriver>();
-            Transform rightAnchor = new GameObject("ShadowCast_RightControllerAnchor").transform;
-            Transform leftAnchor = new GameObject("ShadowCast_LeftControllerAnchor").transform;
+            XRHandAnchorDriver anchors = gameObject.AddComponent<XRHandAnchorDriver>();
+            Transform rightAnchor = new GameObject("ShadowCast_RightHandPinchAnchor").transform;
+            Transform leftAnchor = new GameObject("ShadowCast_LeftHandPointAnchor").transform;
             rightAnchor.SetParent(transform, false); leftAnchor.SetParent(transform, false);
             anchors.Initialize(rightAnchor, leftAnchor, build, camera);
             CampaignLevelRuntime runtime = gameObject.AddComponent<CampaignLevelRuntime>();
@@ -181,60 +184,46 @@ namespace ShadowCast.Core.Campaign
         }
     }
 
-    /// <summary>Mirrors controller tracking poses for the existing pinch and two-hand build manipulator.</summary>
-    public sealed class XRControllerAnchorDriver : MonoBehaviour
+    public static class TrackedHands
+    {
+        private static int cachedFrame = -1;
+        private static IHand leftHand, rightHand;
+        public static IHand Find(Handedness side)
+        {
+            if (cachedFrame == Time.frameCount) return side == Handedness.Left ? leftHand : rightHand;
+            cachedFrame = Time.frameCount;
+            leftHand = rightHand = null;
+            foreach (var hand in UnityEngine.Object.FindObjectsByType<Hand>(FindObjectsSortMode.None))
+            {
+                if (!hand.IsConnected || !hand.IsTrackedDataValid) continue;
+                string path = hand.transform.name;
+                for (Transform parent = hand.transform.parent; parent != null; parent = parent.parent) path += "/" + parent.name;
+                if (path.IndexOf("Controller", StringComparison.OrdinalIgnoreCase) >= 0 || path.IndexOf("Synthetic", StringComparison.OrdinalIgnoreCase) >= 0) continue;
+                if (hand.Handedness == Handedness.Left) leftHand = hand; else rightHand = hand;
+            }
+            return side == Handedness.Left ? leftHand : rightHand;
+        }
+        public static bool Pinch(Handedness side, HandFinger finger)
+        { IHand hand = Find(side); return hand != null && hand.GetFingerIsPinching(finger); }
+    }
+    public sealed class XRHandAnchorDriver : MonoBehaviour
     {
         private Transform rightAnchor, leftAnchor;
         private BuildModeManager build;
         private Camera view;
-        private InputDevice rightDevice, leftDevice;
-        private bool configured;
-
         public void Initialize(Transform right, Transform left, BuildModeManager manager, Camera camera)
-        {
-            rightAnchor = right; leftAnchor = left; build = manager; view = camera;
-        }
-
+        { rightAnchor = right; leftAnchor = left; build = manager; view = camera; }
         private void Update()
         {
-            if (!rightDevice.isValid) rightDevice = FindDevice(InputDeviceCharacteristics.Right | InputDeviceCharacteristics.Controller);
-            if (!leftDevice.isValid) leftDevice = FindDevice(InputDeviceCharacteristics.Left | InputDeviceCharacteristics.Controller);
-            Vector3 rightPosition = Vector3.zero, leftPosition = Vector3.zero;
-            Quaternion rightRotation = Quaternion.identity, leftRotation = Quaternion.identity;
-            bool rightTracked = rightDevice.isValid && rightDevice.TryGetFeatureValue(CommonUsages.devicePosition, out rightPosition) && rightDevice.TryGetFeatureValue(CommonUsages.deviceRotation, out rightRotation);
-            bool leftTracked = leftDevice.isValid && leftDevice.TryGetFeatureValue(CommonUsages.devicePosition, out leftPosition) && leftDevice.TryGetFeatureValue(CommonUsages.deviceRotation, out leftRotation);
-            if (rightTracked)
+            IHand right = TrackedHands.Find(Handedness.Right);
+            IHand left = TrackedHands.Find(Handedness.Left);
+            if (right != null && right.GetJointPose(HandJointId.HandIndexTip, out Pose index) && right.GetJointPose(HandJointId.HandThumbTip, out Pose thumb))
             {
-                Transform trackingOrigin = view != null ? view.transform.parent : null;
-                if (trackingOrigin != null)
-                {
-                    rightPosition = trackingOrigin.TransformPoint(rightPosition);
-                    rightRotation = trackingOrigin.rotation * rightRotation;
-                }
-                rightAnchor.SetPositionAndRotation(rightPosition, rightRotation);
-                if (!configured)
-                {
-                    build.InputBridge.ConfigureInputAnchors(rightAnchor, leftTracked ? leftAnchor : null, view);
-                    configured = true;
-                }
+                rightAnchor.SetPositionAndRotation((index.position + thumb.position) * .5f, index.rotation);
+                if (build != null && build.InputBridge != null)
+                    build.InputBridge.ConfigureInputAnchors(rightAnchor, left != null && left.GetIndexFingerIsPinching() ? leftAnchor : null, view);
             }
-            if (leftTracked)
-            {
-                Transform trackingOrigin = view != null ? view.transform.parent : null;
-                if (trackingOrigin != null)
-                {
-                    leftPosition = trackingOrigin.TransformPoint(leftPosition);
-                    leftRotation = trackingOrigin.rotation * leftRotation;
-                }
-                leftAnchor.SetPositionAndRotation(leftPosition, leftRotation);
-            }
-        }
-
-        private static InputDevice FindDevice(InputDeviceCharacteristics characteristics)
-        {
-            var devices = new List<InputDevice>();
-            InputDevices.GetDevicesWithCharacteristics(characteristics, devices);
-            return devices.Count > 0 ? devices[0] : default;
+            if (left != null && left.GetJointPose(HandJointId.HandIndexTip, out Pose point)) leftAnchor.SetPositionAndRotation(point.position, point.rotation);
         }
     }
 
@@ -455,6 +444,7 @@ namespace ShadowCast.Core.Campaign
         private void SetCanvasVisible(bool visible)
         {
             canvasVisible = visible;
+            if (visible) PositionCanvasInView();
             canvas.gameObject.SetActive(visible);
         }
 
@@ -464,7 +454,6 @@ namespace ShadowCast.Core.Campaign
             PollOverlayToggle();
             if (canvasVisible || (gameplayHud != null && gameplayHud.HasInteractiveUI))
             {
-                if (canvasVisible) PositionCanvasInView();
                 PollPointer();
             }
             if (flow.CurrentScreen == CampaignScreen.Play && (gameplayHud == null || !gameplayHud.IsPaused)) PollPlayInput();
@@ -476,19 +465,8 @@ namespace ShadowCast.Core.Campaign
             bool overlayKeyDown = keyboard != null && keyboard.tabKey.isPressed;
             bool pauseKeyDown = keyboard != null && keyboard.escapeKey.isPressed;
             bool pickerDown = keyboard != null && keyboard.pKey.isPressed;
-            bool menuButtonDown = false;
-            if (!rightController.isValid)
-            {
-                var devices = new List<InputDevice>();
-                InputDevices.GetDevicesWithCharacteristics(InputDeviceCharacteristics.Right | InputDeviceCharacteristics.Controller, devices);
-                if (devices.Count > 0) rightController = devices[0];
-            }
-            if (rightController.isValid)
-            {
-                rightController.TryGetFeatureValue(CommonUsages.menuButton, out menuButtonDown);
-                if (rightController.TryGetFeatureValue(CommonUsages.secondaryButton, out bool secondaryButton))
-                    pickerDown |= secondaryButton;
-            }
+            bool menuButtonDown = TrackedHands.Pinch(Handedness.Right, HandFinger.Pinky);
+            pickerDown |= TrackedHands.Pinch(Handedness.Right, HandFinger.Ring);
             bool pauseDown = pauseKeyDown || (flow.CurrentScreen == CampaignScreen.Play && menuButtonDown);
             bool overlayDown = overlayKeyDown || (flow.CurrentScreen == CampaignScreen.Build && menuButtonDown);
             if (pickerDown && !pickerWasDown && flow.CurrentScreen == CampaignScreen.Build)
@@ -526,18 +504,13 @@ namespace ShadowCast.Core.Campaign
         private void PositionCanvasInView()
         {
             Transform cameraTransform = view.transform;
-            canvas.transform.position = cameraTransform.position + cameraTransform.forward * 1.35f;
+            canvas.transform.position = cameraTransform.position + cameraTransform.forward * 2f;
             canvas.transform.rotation = Quaternion.LookRotation(cameraTransform.forward, cameraTransform.up);
         }
 
         private void PollPointer()
         {
-            if (!rightController.isValid)
-            {
-                var devices = new List<InputDevice>(); InputDevices.GetDevicesWithCharacteristics(InputDeviceCharacteristics.Right | InputDeviceCharacteristics.Controller, devices);
-                if (devices.Count > 0) rightController = devices[0];
-            }
-            bool trigger = rightController.isValid && rightController.TryGetFeatureValue(CommonUsages.triggerButton, out bool pressed) && pressed;
+            bool trigger = TrackedHands.Pinch(Handedness.Right, HandFinger.Index);
             Mouse mouse = Mouse.current;
             Keyboard keyboard = Keyboard.current;
             bool mouseClick = mouse != null && mouse.leftButton.wasPressedThisFrame;
@@ -546,7 +519,24 @@ namespace ShadowCast.Core.Campaign
             bool pointerDown = trigger || mouseDown;
             bool click = (trigger && !triggerWasDown) || mouseClick || keyboardClick;
             triggerWasDown = trigger;
-            Vector2 pointerPosition = mouseClick || mouseDown ? mouse.position.ReadValue() : new Vector2(Screen.width * .5f, Screen.height * .5f);
+            Vector2 pointerPosition = mouseClick || mouseDown ? mouse.position.ReadValue() : view.pixelRect.center;
+            if (!mouseClick && !mouseDown && trigger)
+            {
+                IHand hand = TrackedHands.Find(Handedness.Right);
+                Transform target = gameplayHud != null && gameplayHud.IsPaused
+                    ? gameplayHud.GetComponentInChildren<Canvas>()?.transform : canvas.transform;
+                if (hand == null || target == null || !hand.GetPointerPose(out Pose pointing)) return;
+                Ray ray = new Ray(pointing.position, pointing.rotation * Vector3.forward);
+                if (!new Plane(target.forward, target.position).Raycast(ray, out float distance)) return;
+                Vector3 screen = view.WorldToScreenPoint(ray.GetPoint(distance));
+                if (screen.z <= 0f) return;
+                pointerPosition = screen;
+            }
+            if (!view.pixelRect.Contains(pointerPosition))
+            {
+                screenMoveInput = 0f;
+                return;
+            }
             rayResults.Clear();
             var pointer = new PointerEventData(EventSystem.current) { position = pointerPosition };
             EventSystem.current.RaycastAll(pointer, rayResults);
@@ -576,18 +566,12 @@ namespace ShadowCast.Core.Campaign
             }
             bool jumpDown = keyboard != null && (keyboard.spaceKey.isPressed || keyboard.wKey.isPressed || keyboard.upArrowKey.isPressed);
             bool dashDown = keyboard != null && (keyboard.leftShiftKey.isPressed || keyboard.rightShiftKey.isPressed || keyboard.eKey.isPressed);
-            var devices = new List<InputDevice>(); InputDevices.GetDevicesWithCharacteristics(InputDeviceCharacteristics.Left | InputDeviceCharacteristics.Controller, devices);
-            if (devices.Count > 0)
-            {
-                if (devices[0].TryGetFeatureValue(CommonUsages.primary2DAxis, out Vector2 stick)) axis = Mathf.Abs(stick.x) > 0.15f ? stick.x : 0f;
-            }
+            IHand leftHand = TrackedHands.Find(Handedness.Left);
+            if (leftHand != null && leftHand.GetIndexFingerIsPinching() && leftHand.GetRootPose(out Pose wrist))
+                axis = Mathf.Clamp((view.transform.InverseTransformPoint(wrist.position).x + 0.25f) / 0.18f, -1f, 1f);
             if (Mathf.Abs(screenMoveInput) > 0.01f) axis = screenMoveInput;
-            var rightDevices = new List<InputDevice>(); InputDevices.GetDevicesWithCharacteristics(InputDeviceCharacteristics.Right | InputDeviceCharacteristics.Controller, rightDevices);
-            if (rightDevices.Count > 0)
-            {
-                if (rightDevices[0].TryGetFeatureValue(CommonUsages.primaryButton, out bool a) && a) jumpDown = true;
-                if (rightDevices[0].TryGetFeatureValue(CommonUsages.secondaryButton, out bool b) && b) dashDown = true;
-            }
+            jumpDown |= TrackedHands.Pinch(Handedness.Right, HandFinger.Middle);
+            dashDown |= TrackedHands.Pinch(Handedness.Right, HandFinger.Ring);
             character.SetMovementInput(axis);
             if (jumpDown && !jumpWasDown) character.RequestJump();
             else if (!jumpDown && jumpWasDown) character.ReleaseJump();

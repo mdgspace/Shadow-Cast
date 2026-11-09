@@ -101,8 +101,9 @@ namespace ShadowCast.Core.Campaign
         private void LateUpdate()
         {
             if (view == null || canvas == null) return;
+            if (IsPaused) return;
             Transform cameraTransform = view.transform;
-            Vector3 targetPosition = cameraTransform.position + cameraTransform.forward * 1.15f;
+            Vector3 targetPosition = cameraTransform.position + cameraTransform.forward * 1.8f;
             Quaternion targetRotation = Quaternion.LookRotation(cameraTransform.forward, cameraTransform.up);
             bool reducedMotion = progress != null && progress.Settings.reducedMotion;
             float blend = reducedMotion ? 1f : 1f - Mathf.Exp(-12f * Time.unscaledDeltaTime);
@@ -127,6 +128,11 @@ namespace ShadowCast.Core.Campaign
                 (flow.CurrentScreen == CampaignScreen.Build || flow.CurrentScreen == CampaignScreen.Play));
             if (paused)
             {
+                if (view != null && canvas != null)
+                {
+                    canvas.transform.position = view.transform.position + view.transform.forward * 1.8f;
+                    canvas.transform.rotation = Quaternion.LookRotation(view.transform.forward, view.transform.up);
+                }
                 previousTimeScale = Mathf.Approximately(Time.timeScale, 0f) ? 1f : Time.timeScale;
                 Time.timeScale = 0f;
                 AudioListener.pause = true;

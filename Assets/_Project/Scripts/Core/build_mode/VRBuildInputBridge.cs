@@ -4,6 +4,9 @@ using System.Collections.Generic;
 using UnityEngine;
 using UnityEngine.InputSystem;
 using UnityEngine.XR;
+using Oculus.Interaction.Input;
+using HandFinger = Oculus.Interaction.Input.HandFinger;
+using ShadowCast.Core.Campaign;
 
 namespace ShadowCast.Core.BuildMode
 {
@@ -31,10 +34,6 @@ namespace ShadowCast.Core.BuildMode
         [SerializeField] private bool _enableEditorSimulation = true;
         [SerializeField] private bool _showDebugGUI = true;
 
-        [Header("Haptics Configuration")]
-        [SerializeField] private float _hapticAmplitude = 0.5f;
-        [SerializeField] private float _hapticDuration = 0.08f;
-
         // Internal dependencies (auto-resolved)
         private BuildModeManager _buildModeManager;
         private ObjectManipulator _manipulator;
@@ -43,9 +42,6 @@ namespace ShadowCast.Core.BuildMode
 
         // Input state
         private bool _wasPinching = false;
-        private UnityEngine.XR.InputDevice _rightDevice;
-        private UnityEngine.XR.InputDevice _leftDevice;
-        private bool _devicesInitialized = false;
 
         // Editor simulation virtual pinch anchor
         private GameObject _simulatedRightAnchor;
@@ -82,7 +78,7 @@ namespace ShadowCast.Core.BuildMode
                 _boundingVolume.OnBoundaryHit += HandleBoundaryHit;
             }
 
-            InitializeXRDevices();
+
         }
 
         private void OnDestroy()
@@ -103,12 +99,12 @@ namespace ShadowCast.Core.BuildMode
             // Attempt to locate Meta Quest or OpenXR hand/controller anchors
             if (_rightPinchAnchor == null)
             {
-                _rightPinchAnchor = FindAnchorByNames("RightHandAnchor", "RightControllerAnchor", "RightHandDirectPinchProxy", "RightHand");
+                _rightPinchAnchor = FindAnchorByNames("RightHandDirectPinchProxy", "RightHandAnchor", "RightHand");
             }
 
             if (_leftPointAnchor == null)
             {
-                _leftPointAnchor = FindAnchorByNames("LeftHandAnchor", "LeftControllerAnchor", "LeftHandDirectPinchProxy", "LeftHand");
+                _leftPointAnchor = FindAnchorByNames("LeftHandDirectPinchProxy", "LeftHandAnchor", "LeftHand");
             }
 
             // In Editor or Non-VR desktop mode, setup simulated anchors
@@ -128,7 +124,7 @@ namespace ShadowCast.Core.BuildMode
         {
             if (rightPinchAnchor == null) return;
             _rightPinchAnchor = rightPinchAnchor;
-            if (leftPointAnchor != null) _leftPointAnchor = leftPointAnchor;
+            _leftPointAnchor = leftPointAnchor;
             if (headsetCamera != null) _headsetCamera = headsetCamera;
             _manipulator?.ConfigureAnchors(_rightPinchAnchor, _leftPointAnchor, _headsetCamera);
         }
@@ -164,27 +160,9 @@ namespace ShadowCast.Core.BuildMode
             }
         }
 
-        private void InitializeXRDevices()
-        {
-            var rightDevices = new List<UnityEngine.XR.InputDevice>();
-            InputDevices.GetDevicesWithCharacteristics(InputDeviceCharacteristics.Right | InputDeviceCharacteristics.Controller, rightDevices);
-            if (rightDevices.Count > 0) _rightDevice = rightDevices[0];
-
-            var leftDevices = new List<UnityEngine.XR.InputDevice>();
-            InputDevices.GetDevicesWithCharacteristics(InputDeviceCharacteristics.Left | InputDeviceCharacteristics.Controller, leftDevices);
-            if (leftDevices.Count > 0) _leftDevice = leftDevices[0];
-
-            _devicesInitialized = true;
-        }
-
+        private bool undoWasDown, redoWasDown;
         private void Update()
         {
-            if (!_devicesInitialized || !_rightDevice.isValid || !_leftDevice.isValid)
-            {
-                InitializeXRDevices();
-            }
-
-            // Build manipulation, including light grabs, is unavailable while the player is using the arcade controls.
             if (_buildModeManager != null && (!_buildModeManager.IsBuildMode ||
                 (_buildModeManager.BakePipeline != null && _buildModeManager.BakePipeline.CurrentState == BakeState.Baking)))
             {
@@ -192,84 +170,16 @@ namespace ShadowCast.Core.BuildMode
                 _wasPinching = false;
                 return;
             }
-
-            bool isPinching = PollPinchState();
-
-            // Detect Pinch Edge Trigger
-            if (isPinching && !_wasPinching)
-            {
-                _manipulator?.BeginPinchGrab();
-            }
-            else if (!isPinching && _wasPinching)
-            {
-                _manipulator?.ReleasePinchGrab();
-            }
-
-            _wasPinching = isPinching;
-
-            // Poll VR Controller Buttons / Wrist Taps for Undo/Redo
-            PollSecondaryGestures();
-
-            // Editor / Non-VR testing simulation
-            if (_enableEditorSimulation)
-            {
-                UpdateEditorSimulation();
-            }
-        }
-
-        private bool PollPinchState()
-        {
-            try
-            {
-                if (OVRInput.Get(OVRInput.Button.PrimaryIndexTrigger, OVRInput.Controller.RTouch) ||
-                    OVRInput.Get(OVRInput.Button.One, OVRInput.Controller.RTouch) ||
-                    OVRInput.Get(OVRInput.Button.PrimaryHandTrigger, OVRInput.Controller.RTouch) ||
-                    OVRInput.Get(OVRInput.Button.PrimaryIndexTrigger, OVRInput.Controller.RHand))
-                {
-                    return true;
-                }
-            }
-            catch { }
-
-            if (_rightDevice.isValid)
-            {
-                if (_rightDevice.TryGetFeatureValue(UnityEngine.XR.CommonUsages.triggerButton, out bool trigger) && trigger)
-                {
-                    return true;
-                }
-                if (_rightDevice.TryGetFeatureValue(UnityEngine.XR.CommonUsages.gripButton, out bool grip) && grip)
-                {
-                    return true;
-                }
-            }
-
-            return false;
-        }
-
-        private void PollSecondaryGestures()
-        {
-            try
-            {
-                if (OVRInput.GetDown(OVRInput.Button.Two, OVRInput.Controller.LTouch) ||
-                    OVRInput.GetDown(OVRInput.Button.Three, OVRInput.Controller.LTouch))
-                {
-                    _undoRedo?.Undo();
-                }
-
-                if (OVRInput.GetDown(OVRInput.Button.Four, OVRInput.Controller.LTouch))
-                {
-                    _undoRedo?.Redo();
-                }
-            }
-            catch { }
-
-            if (_leftDevice.isValid)
-            {
-                if (_leftDevice.TryGetFeatureValue(UnityEngine.XR.CommonUsages.primaryButton, out bool btn) && btn)
-                {
-                    _undoRedo?.Undo();
-                }
-            }
+            bool pinch = TrackedHands.Pinch(Handedness.Right, HandFinger.Index);
+            if (pinch && !_wasPinching) _manipulator?.BeginPinchGrab();
+            else if (!pinch && _wasPinching) _manipulator?.ReleasePinchGrab();
+            _wasPinching = pinch;
+            bool undo = TrackedHands.Pinch(Handedness.Left, HandFinger.Middle);
+            bool redo = TrackedHands.Pinch(Handedness.Left, HandFinger.Ring);
+            if (undo && !undoWasDown) _undoRedo?.Undo();
+            if (redo && !redoWasDown) _undoRedo?.Redo();
+            undoWasDown = undo; redoWasDown = redo;
+            if (_enableEditorSimulation) UpdateEditorSimulation();
         }
 
         private void UpdateEditorSimulation()
@@ -278,6 +188,7 @@ namespace ShadowCast.Core.BuildMode
             Mouse mouse = Mouse.current;
             Keyboard keyboard = Keyboard.current;
             Vector2 mousePosition = mouse.position.ReadValue();
+            if (!_headsetCamera.pixelRect.Contains(mousePosition)) return;
 
             // Toggle HUD overlay
             if (keyboard != null && keyboard.f1Key.wasPressedThisFrame)
@@ -377,38 +288,8 @@ namespace ShadowCast.Core.BuildMode
             }
         }
 
-        private void HandleBoundaryHit(Vector3 normal)
-        {
-            TriggerHapticPulse();
-        }
-
-        public void TriggerHapticPulse()
-        {
-            try
-            {
-                OVRInput.SetControllerVibration(_hapticAmplitude, _hapticAmplitude, OVRInput.Controller.RTouch);
-                StartCoroutine(StopHapticsAfterDuration(_hapticDuration));
-            }
-            catch { }
-
-            if (_rightDevice.isValid)
-            {
-                if (_rightDevice.TryGetHapticCapabilities(out HapticCapabilities capabilities) && capabilities.supportsImpulse)
-                {
-                    _rightDevice.SendHapticImpulse(0, _hapticAmplitude, _hapticDuration);
-                }
-            }
-        }
-
-        private IEnumerator StopHapticsAfterDuration(float duration)
-        {
-            yield return new WaitForSeconds(duration);
-            try
-            {
-                OVRInput.SetControllerVibration(0f, 0f, OVRInput.Controller.RTouch);
-            }
-            catch { }
-        }
+        private void HandleBoundaryHit(Vector3 normal) { }
+        public void TriggerHapticPulse() { }
 
         private void OnGUI()
         {
