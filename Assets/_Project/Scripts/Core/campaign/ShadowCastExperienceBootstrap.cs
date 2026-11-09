@@ -53,6 +53,7 @@ namespace ShadowCast.Core.Campaign
                 cameraObject.AddComponent<AudioListener>();
             }
 
+            MixedRealityPassthroughBootstrap.Ensure(gameObject, camera);
             EnsureEventSystem();
             BuildModeManager build = FindAnyObjectByType<BuildModeManager>();
             if (build == null) build = gameObject.AddComponent<BuildModeManager>();
@@ -608,5 +609,34 @@ namespace ShadowCast.Core.Campaign
         }
         private void OnMessage(string message) { Debug.Log(message, this); }
         private void OnDestroy() { if (flow != null) { flow.ScreenChanged -= OnScreen; flow.MessageChanged -= OnMessage; } }
+    }
+
+    /// <summary>
+    /// Configures the Meta passthrough underlay used by the campaign's mixed-reality presentation.
+    /// The campaign places its play surface manually, so it does not depend on Scene Capture/MRUK.
+    /// </summary>
+    internal static class MixedRealityPassthroughBootstrap
+    {
+        public static void Ensure(GameObject host, Camera xrCamera)
+        {
+            if (host == null) return;
+
+            // An underlay is only visible through transparent pixels in the eye camera.
+            if (xrCamera != null)
+            {
+                xrCamera.clearFlags = CameraClearFlags.SolidColor;
+                xrCamera.backgroundColor = Color.clear;
+            }
+
+            OVRManager manager = UnityEngine.Object.FindAnyObjectByType<OVRManager>();
+            if (manager == null) manager = host.AddComponent<OVRManager>();
+            manager.isInsightPassthroughEnabled = true;
+
+            OVRPassthroughLayer layer = UnityEngine.Object.FindAnyObjectByType<OVRPassthroughLayer>();
+            if (layer == null) layer = host.AddComponent<OVRPassthroughLayer>();
+            layer.hidden = false;
+            layer.textureOpacity = 1f;
+            layer.edgeRenderingEnabled = false;
+        }
     }
 }
