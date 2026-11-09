@@ -67,6 +67,10 @@ namespace ShadowCast.Core.Campaign
             anchors.Initialize(rightAnchor, leftAnchor, build, camera);
             CampaignLevelRuntime runtime = gameObject.AddComponent<CampaignLevelRuntime>();
             CampaignFlowController flow = gameObject.AddComponent<CampaignFlowController>();
+            // CampaignLevelRuntime.Awake runs as soon as the component is added, before the
+            // flow component exists. Wire it explicitly so goals and failure bounds can
+            // report back to the campaign instead of silently receiving a null controller.
+            SetField(runtime, "flowController", flow);
             List<ChapterDefinition> activeChapters = new List<ChapterDefinition>();
             for (int i = 0; i < campaignChapters.Count; i++)
                 if (campaignChapters[i] != null) activeChapters.Add(campaignChapters[i]);
@@ -76,11 +80,13 @@ namespace ShadowCast.Core.Campaign
             SetField(flow, "chapters", activeChapters);
             SetField(flow, "levelRuntime", runtime);
             SetField(flow, "buildModeManager", build);
+            WallPlacementController wallPlacement = gameObject.AddComponent<WallPlacementController>();
+            wallPlacement.Initialize(camera);
 
             ShadowCastHeadsetUI ui = gameObject.AddComponent<ShadowCastHeadsetUI>();
             CampaignGameplayHUD gameplayHud = gameObject.AddComponent<CampaignGameplayHUD>();
             gameplayHud.Initialize(flow, camera);
-            ui.Initialize(flow, build, camera, this, gameplayHud);
+            ui.Initialize(flow, build, camera, this, gameplayHud, wallPlacement);
         }
 
         private ChapterDefinition CreateSampleCampaign()
@@ -193,7 +199,7 @@ namespace ShadowCast.Core.Campaign
             if (cachedFrame == Time.frameCount) return side == Handedness.Left ? leftHand : rightHand;
             cachedFrame = Time.frameCount;
             leftHand = rightHand = null;
-            foreach (var hand in UnityEngine.Object.FindObjectsByType<Hand>(FindObjectsSortMode.None))
+            foreach (var hand in UnityEngine.Object.FindObjectsByType<Hand>(FindObjectsInactive.Exclude))
             {
                 if (!hand.IsConnected || !hand.IsTrackedDataValid) continue;
                 string path = hand.transform.name;
@@ -251,17 +257,22 @@ namespace ShadowCast.Core.Campaign
         private float screenMoveInput;
         private WallPlatformerController2D character;
         private CampaignGameplayHUD gameplayHud;
+        private WallPlacementController wallPlacement;
         private GameObject blockPrefab, rampPrefab, orbPrefab;
         private CampaignScreen currentScreen;
+        private float initialCanvasPlacementDeadline;
 
-        public void Initialize(CampaignFlowController controller, BuildModeManager manager, Camera playerCamera, ShadowCastExperienceBootstrap experience, CampaignGameplayHUD hud)
+        public void Initialize(CampaignFlowController controller, BuildModeManager manager, Camera playerCamera, ShadowCastExperienceBootstrap experience, CampaignGameplayHUD hud, WallPlacementController placement)
         {
-            flow = controller; build = manager; view = playerCamera; gameplayHud = hud;
+            flow = controller; build = manager; view = playerCamera; gameplayHud = hud; wallPlacement = placement;
             if (experience != null)
             {
                 blockPrefab = experience.BlockPrefab; rampPrefab = experience.RampPrefab; orbPrefab = experience.OrbPrefab;
             }
             CreateCanvas();
+            // XR tracking commonly updates the eye camera after scene/runtime Awake. Keep
+            // settling the first menu briefly so it cannot be stranded at the rig origin.
+            initialCanvasPlacementDeadline = Time.unscaledTime + 1.5f;
             flow.ScreenChanged += OnScreen;
             flow.MessageChanged += OnMessage;
             OnScreen(flow.CurrentScreen);
@@ -287,6 +298,12 @@ namespace ShadowCast.Core.Campaign
         private void OnScreen(CampaignScreen screen)
         {
             currentScreen = screen;
+            if (wallPlacement != null)
+            {
+                wallPlacement.SetPlacementActive(screen == CampaignScreen.WallPlacement);
+                if (screen == CampaignScreen.WallPlacement && flow.SelectedLevel != null)
+                    wallPlacement.SetPreviewSize(flow.SelectedLevel.WallWidth, flow.SelectedLevel.WallHeight);
+            }
             PositionCanvasInView();
             ClearHitboxes();
             switch (screen)
@@ -406,6 +423,10 @@ namespace ShadowCast.Core.Campaign
 
         private void PlaceSampleWall()
         {
+            // Prefer a real vertical collider under the center reticle when room geometry
+            // is available. The deterministic virtual wall keeps desktop testing and
+            // headsets without Scene Capture from becoming stuck at this step.
+            if (wallPlacement != null && wallPlacement.Confirm(flow)) return;
             Vector3 forward = Vector3.ProjectOnPlane(view.transform.forward, Vector3.up).normalized;
             if (forward.sqrMagnitude < 0.1f) forward = Vector3.forward;
             Pose pose = new Pose(view.transform.position + forward * 2.8f, Quaternion.LookRotation(-forward, Vector3.up));
@@ -459,6 +480,12 @@ namespace ShadowCast.Core.Campaign
             if (flow.CurrentScreen == CampaignScreen.Play && (gameplayHud == null || !gameplayHud.IsPaused)) PollPlayInput();
         }
 
+        private void LateUpdate()
+        {
+            if (view != null && canvas != null && canvasVisible && Time.unscaledTime <= initialCanvasPlacementDeadline)
+                PositionCanvasInView();
+        }
+
         private void PollOverlayToggle()
         {
             Keyboard keyboard = Keyboard.current;
@@ -505,12 +532,16 @@ namespace ShadowCast.Core.Campaign
         {
             Transform cameraTransform = view.transform;
             canvas.transform.position = cameraTransform.position + cameraTransform.forward * 2f;
+            // GraphicRaycaster considers this orientation front-facing for a world-space
+            // canvas viewed by the assigned event camera.
             canvas.transform.rotation = Quaternion.LookRotation(cameraTransform.forward, cameraTransform.up);
         }
 
         private void PollPointer()
         {
-            bool trigger = TrackedHands.Pinch(Handedness.Right, HandFinger.Index);
+            bool handTrigger = TrackedHands.Pinch(Handedness.Right, HandFinger.Index);
+            bool controllerTrigger = GetRightControllerTrigger();
+            bool trigger = handTrigger || controllerTrigger;
             Mouse mouse = Mouse.current;
             Keyboard keyboard = Keyboard.current;
             bool mouseClick = mouse != null && mouse.leftButton.wasPressedThisFrame;
@@ -520,7 +551,7 @@ namespace ShadowCast.Core.Campaign
             bool click = (trigger && !triggerWasDown) || mouseClick || keyboardClick;
             triggerWasDown = trigger;
             Vector2 pointerPosition = mouseClick || mouseDown ? mouse.position.ReadValue() : view.pixelRect.center;
-            if (!mouseClick && !mouseDown && trigger)
+            if (!mouseClick && !mouseDown && handTrigger)
             {
                 IHand hand = TrackedHands.Find(Handedness.Right);
                 Transform target = gameplayHud != null && gameplayHud.IsPaused
@@ -551,6 +582,20 @@ namespace ShadowCast.Core.Campaign
             screenMoveInput = currentScreen == CampaignScreen.Play && pointerDown && hovered != null && movementHitboxes.TryGetValue(hovered, out float movement)
                 ? movement
                 : 0f;
+        }
+
+        private bool GetRightControllerTrigger()
+        {
+            if (!rightController.isValid)
+                rightController = InputDevices.GetDeviceAtXRNode(XRNode.RightHand);
+
+            if (!rightController.isValid ||
+                !rightController.TryGetFeatureValue(CommonUsages.triggerButton, out bool pressed))
+            {
+                return false;
+            }
+
+            return pressed;
         }
 
         private void PollPlayInput()

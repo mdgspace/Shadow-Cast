@@ -7,7 +7,7 @@ namespace ShadowCast.Core.Campaign
     public sealed class WallPlacementController : MonoBehaviour
     {
         [SerializeField] private Camera playerCamera;
-        [SerializeField] private LayerMask roomWallMask;
+        [SerializeField] private LayerMask roomWallMask = ~0;
         [SerializeField, Min(0.01f)] private float maxDistance = 5f;
         [SerializeField, Min(0f)] private float wallStandOff = 0.03f;
         [SerializeField] private Color previewColor = new Color(0.2f, 0.9f, 1f, 0.9f);
@@ -17,6 +17,7 @@ namespace ShadowCast.Core.Campaign
         public Pose CandidatePose { get; private set; }
         private LineRenderer previewFrame;
         private Material previewMaterial;
+        private bool placementActive;
 
         private void Awake()
         {
@@ -26,7 +27,7 @@ namespace ShadowCast.Core.Campaign
 
         private void Update()
         {
-            if (playerCamera == null) return;
+            if (!placementActive || playerCamera == null) return;
             Ray ray = playerCamera.ViewportPointToRay(new Vector3(0.5f, 0.5f, 0f));
             bool found = Physics.Raycast(ray, out RaycastHit hit, maxDistance, roomWallMask, QueryTriggerInteraction.Ignore)
                 && Mathf.Abs(Vector3.Dot(hit.normal, Vector3.up)) < 0.35f;
@@ -44,6 +45,17 @@ namespace ShadowCast.Core.Campaign
             if (!HasCandidate || flow == null) return false;
             flow.ConfirmWallPlacement(CandidatePose);
             return true;
+        }
+
+        public void Initialize(Camera camera)
+        {
+            playerCamera = camera != null ? camera : Camera.main;
+        }
+
+        public void SetPlacementActive(bool active)
+        {
+            placementActive = active;
+            if (!active) SetCandidate(false, default);
         }
 
         public void SetPreviewSize(float width, float height)
