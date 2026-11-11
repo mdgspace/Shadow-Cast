@@ -10,10 +10,14 @@ namespace ShadowCast.Core.Campaign
         private OVRPassthroughLayer layer;
         private float nextCheck;
         private bool requested;
+        private float started;
+        private bool warned;
+        public string RuntimeStatus { get; private set; }
 
         public void Initialize(Camera camera)
         {
             view = camera;
+            started = Time.unscaledTime;
             UpdateBackground(false);
         }
 
@@ -36,6 +40,12 @@ namespace ShadowCast.Core.Campaign
             }
             bool ready = active && requested && layer != null && layer.isActiveAndEnabled && !layer.hidden &&
                 OVRManager.IsInsightPassthroughInitialized();
+            RuntimeStatus = ready ? "Ready" : !active ? "No active XR display" : requested ? "Waiting for passthrough compositor" : "Passthrough unavailable from current runtime";
+            if (active && !ready && !warned && Time.unscaledTime - started > 8f)
+            {
+                warned = true;
+                Debug.LogWarning("[Shadow Cast] " + RuntimeStatus + ". For room video over Link, enable Developer Runtime Features and Passthrough over Meta Quest Link in the Link PC app under Settings > Beta, then restart Unity.", this);
+            }
             UpdateBackground(ready);
         }
 

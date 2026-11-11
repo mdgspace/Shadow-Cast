@@ -10,7 +10,7 @@ namespace ShadowCast.Core.Campaign
     {
         private const float Width = 1200f;
         private const float Height = 700f;
-        private static readonly Color PanelColor = new Color(0.035f, 0.045f, 0.075f, 0.94f);
+        private static readonly Color PanelColor = Color.clear;
         private static readonly Color Cyan = new Color(0.20f, 0.90f, 1f, 1f);
         private static readonly Color Pink = new Color(1f, 0.35f, 0.78f, 1f);
 
@@ -42,7 +42,34 @@ namespace ShadowCast.Core.Campaign
         private float hideHintAt;
         private float hideWarningAt;
 
+        private bool navigationMenuVisible;
+        private bool leftHeld, rightHeld;
+        public Canvas UICanvas => canvas;
+        public float MovementInput => (rightHeld ? 1f : 0f) - (leftHeld ? 1f : 0f);
+        public event Action MenuRequested;
         public bool IsPaused { get; private set; }
+
+        public void SetNavigationMenuVisible(bool visible)
+        {
+            navigationMenuVisible = visible;
+            UpdateHUDVisibility();
+        }
+
+        private void UpdateHUDVisibility()
+        {
+            bool playing = flow != null && flow.CurrentScreen == CampaignScreen.Play;
+            bool editing = flow != null && flow.CurrentScreen == CampaignScreen.Build;
+            if (gameplayRoot != null) gameplayRoot.SetActive(playing && !IsPaused && !navigationMenuVisible);
+            if (scoreHintRoot != null) scoreHintRoot.SetActive((playing || editing) && !IsPaused && !navigationMenuVisible);
+            if (continueRoot != null) continueRoot.SetActive(false);
+            if (completionRoot != null) completionRoot.SetActive(false);
+        }
+
+        private void RequestMenu()
+        {
+            if (flow != null && flow.CurrentScreen == CampaignScreen.Build) MenuRequested?.Invoke();
+            else TogglePause();
+        }
         public bool HasInteractiveUI => canvas != null && canvas.gameObject.activeInHierarchy &&
             ((gameplayRoot != null && gameplayRoot.activeInHierarchy) || (scoreHintRoot != null && scoreHintRoot.activeInHierarchy) ||
              (continueRoot != null && continueRoot.activeInHierarchy) ||
@@ -103,7 +130,7 @@ namespace ShadowCast.Core.Campaign
             if (view == null || canvas == null) return;
             if (IsPaused) return;
             Transform cameraTransform = view.transform;
-            Vector3 targetPosition = cameraTransform.position + cameraTransform.forward * 1.8f;
+            Vector3 targetPosition = cameraTransform.position + cameraTransform.forward * ShadowCastUIStyle.Distance;
             Quaternion targetRotation = Quaternion.LookRotation(cameraTransform.forward, cameraTransform.up);
             bool reducedMotion = progress != null && progress.Settings.reducedMotion;
             float blend = reducedMotion ? 1f : 1f - Mathf.Exp(-12f * Time.unscaledDeltaTime);
@@ -123,14 +150,12 @@ namespace ShadowCast.Core.Campaign
         {
             IsPaused = paused;
             if (pauseRoot != null) pauseRoot.SetActive(paused);
-            if (gameplayRoot != null) gameplayRoot.SetActive(!paused && flow != null && flow.CurrentScreen == CampaignScreen.Play);
-            if (scoreHintRoot != null) scoreHintRoot.SetActive(!paused && flow != null &&
-                (flow.CurrentScreen == CampaignScreen.Build || flow.CurrentScreen == CampaignScreen.Play));
+            UpdateHUDVisibility();
             if (paused)
             {
                 if (view != null && canvas != null)
                 {
-                    canvas.transform.position = view.transform.position + view.transform.forward * 1.8f;
+                    canvas.transform.position = view.transform.position + view.transform.forward * ShadowCastUIStyle.Distance;
                     canvas.transform.rotation = Quaternion.LookRotation(view.transform.forward, view.transform.up);
                 }
                 previousTimeScale = Mathf.Approximately(Time.timeScale, 0f) ? 1f : Time.timeScale;
@@ -151,10 +176,7 @@ namespace ShadowCast.Core.Campaign
         {
             if (IsPaused) ApplyPaused(false);
             bool playing = screen == CampaignScreen.Play;
-            if (gameplayRoot != null) gameplayRoot.SetActive(playing);
-            if (scoreHintRoot != null) scoreHintRoot.SetActive(screen == CampaignScreen.Build || playing);
-            if (continueRoot != null) continueRoot.SetActive(screen == CampaignScreen.MainMenu && progress != null && progress.HasSave);
-            if (completionRoot != null) completionRoot.SetActive(screen == CampaignScreen.LevelComplete);
+            UpdateHUDVisibility();
             if (hintPanel != null) hintPanel.SetActive(false);
             RefreshScoreDisplay();
             if (screen == CampaignScreen.LevelComplete) RefreshCompletionDisplay();
@@ -232,26 +254,30 @@ namespace ShadowCast.Core.Campaign
         {
             GameObject canvasObject = new GameObject("Gameplay HUD & Pause Menu", typeof(RectTransform), typeof(Canvas), typeof(CanvasScaler), typeof(GraphicRaycaster));
             canvasObject.transform.SetParent(transform, false);
-            canvasObject.transform.localScale = Vector3.one * 0.001f;
             canvas = canvasObject.GetComponent<Canvas>();
             canvas.renderMode = RenderMode.WorldSpace;
-            canvas.worldCamera = view;
+            ShadowCastUIStyle.ConfigureCanvas(canvas, view, Width, ShadowCastUIStyle.HudWidth);
             canvas.overrideSorting = true;
             canvas.sortingOrder = 500;
             canvasObject.GetComponent<CanvasScaler>().dynamicPixelsPerUnit = 1f;
             canvasObject.GetComponent<RectTransform>().sizeDelta = new Vector2(Width, Height);
 
             gameplayRoot = CreateRect("Power-up HUD", canvasObject.transform, Vector2.zero, new Vector2(Width, Height), Color.clear).gameObject;
-            Image abilityPanel = CreateRect("Ability Charges", gameplayRoot.transform, new Vector2(365f, 275f), new Vector2(430f, 112f), new Color(0.025f, 0.04f, 0.07f, 0.86f));
+            Image abilityPanel = CreateRect("Ability Charges", gameplayRoot.transform, new Vector2(365f, 275f), new Vector2(430f, 112f), Color.clear);
             doubleJumpLabel = CreateText("Double Jump Uses", abilityPanel.transform, new Vector2(0f, 25f), new Vector2(390f, 42f), "DOUBLE JUMP   × 0", 25, TextAnchor.MiddleLeft);
             dashLabel = CreateText("Dash Uses", abilityPanel.transform, new Vector2(0f, -24f), new Vector2(390f, 42f), "DASH   × 0", 25, TextAnchor.MiddleLeft);
             scoreHintRoot = CreateRect("Score & Hints", canvasObject.transform, Vector2.zero, new Vector2(Width, Height), Color.clear).gameObject;
-            Image scorePanel = CreateRect("Score", scoreHintRoot.transform, new Vector2(0f, 300f), new Vector2(330f, 58f), new Color(0.025f, 0.04f, 0.07f, 0.86f));
+            Image scorePanel = CreateRect("Score", scoreHintRoot.transform, new Vector2(0f, 300f), new Vector2(330f, 58f), Color.clear);
             scoreLabel = CreateText("Current Score", scorePanel.transform, Vector2.zero, new Vector2(300f, 44f), "LEVEL SCORE   0", 24, TextAnchor.MiddleCenter);
-            CreateButton("Jump Button", gameplayRoot.transform, new Vector2(390f, -265f), new Vector2(170f, 74f), "JUMP", Cyan, () => character?.RequestJump());
-            CreateButton("Dash Button", gameplayRoot.transform, new Vector2(205f, -265f), new Vector2(170f, 74f), "DASH", Pink, () => character?.RequestDash());
-            hintButton = CreateButton("Hint Button", scoreHintRoot.transform, new Vector2(-330f, -265f), new Vector2(250f, 74f), "HINT", new Color(1f, 0.72f, 0.24f), RequestHint);
-            CreateButton("Pause Button", gameplayRoot.transform, new Vector2(-500f, 300f), new Vector2(150f, 54f), "PAUSE", new Color(0.5f, 0.58f, 0.7f), TogglePause);
+            Button jump = CreateButton("Jump Button", gameplayRoot.transform, new Vector2(420f, -250f), new Vector2(230f, 100f), "JUMP", Cyan, null);
+            jump.gameObject.AddComponent<ShadowCastUIHold>().Changed = held => { if (held) character?.RequestJump(); else character?.ReleaseJump(); };
+            Button left = CreateButton("Move Left", gameplayRoot.transform, new Vector2(-500f, -250f), new Vector2(135f, 100f), "LEFT", Cyan, null);
+            left.gameObject.AddComponent<ShadowCastUIHold>().Changed = held => leftHeld = held;
+            Button right = CreateButton("Move Right", gameplayRoot.transform, new Vector2(-345f, -250f), new Vector2(135f, 100f), "RIGHT", Cyan, null);
+            right.gameObject.AddComponent<ShadowCastUIHold>().Changed = held => rightHeld = held;
+            CreateButton("Dash Button", gameplayRoot.transform, new Vector2(170f, -250f), new Vector2(230f, 100f), "DASH", Pink, () => character?.RequestDash());
+            hintButton = CreateButton("Hint Button", scoreHintRoot.transform, new Vector2(-90f, -250f), new Vector2(230f, 100f), "HINT", new Color(1f, 0.72f, 0.24f), RequestHint);
+            CreateButton("Menu Button", scoreHintRoot.transform, new Vector2(-480f, 300f), new Vector2(210f, 80f), "MENU", Cyan, RequestMenu);
 
             Image hintBackground = CreateRect("Hint Panel", scoreHintRoot.transform, new Vector2(0f, 120f), new Vector2(720f, 170f), PanelColor);
             hintPanel = hintBackground.gameObject;
@@ -274,9 +300,9 @@ namespace ShadowCast.Core.Campaign
             warningLabel = CreateText("Warning Text", warningPanel.transform, Vector2.zero, new Vector2(610f, 62f), string.Empty, 24, TextAnchor.MiddleCenter);
             warningPanel.SetActive(false);
 
-            pauseRoot = CreateRect("Pause Overlay", canvasObject.transform, Vector2.zero, new Vector2(Width, Height), new Color(0f, 0f, 0f, 0.62f)).gameObject;
+            pauseRoot = CreateRect("Pause Overlay", canvasObject.transform, Vector2.zero, new Vector2(Width, Height), Color.clear).gameObject;
             Image menuPanel = CreateRect("Pause Panel", pauseRoot.transform, Vector2.zero, new Vector2(620f, 610f), PanelColor);
-            CreateText("Pause Title", menuPanel.transform, new Vector2(0f, 248f), new Vector2(540f, 70f), "SHADOW CAST", 42, TextAnchor.MiddleCenter).color = Color.white;
+            ShadowCastFigmaAssets.Image("UmbraLogo", menuPanel.transform, new Vector2(0f, 248f), new Vector2(280f, 60f));
 
             pausePage = CreateRect("Pause Page", menuPanel.transform, Vector2.zero, new Vector2(600f, 500f), Color.clear).gameObject;
             CreateText("Paused Label", pausePage.transform, new Vector2(0f, 174f), new Vector2(520f, 50f), "PAUSED", 30, TextAnchor.MiddleCenter).color = Cyan;
@@ -297,6 +323,7 @@ namespace ShadowCast.Core.Campaign
             statusLabel = CreateText("Save Status", menuPanel.transform, new Vector2(0f, -260f), new Vector2(520f, 36f), string.Empty, 18, TextAnchor.MiddleCenter);
             pauseRoot.SetActive(false);
             settingsPage.SetActive(false);
+            ShadowCastUIStyle.ApplyToHierarchy(canvas.transform);
         }
 
         private void RequestHint()
@@ -389,6 +416,7 @@ namespace ShadowCast.Core.Campaign
             rect.anchoredPosition = position;
             Image image = target.GetComponent<Image>();
             image.color = color;
+            image.material = ShadowCastUIStyle.Material;
             image.raycastTarget = color.a > 0.01f;
             return image;
         }
@@ -403,6 +431,8 @@ namespace ShadowCast.Core.Campaign
             rect.anchoredPosition = position;
             Text text = target.GetComponent<Text>();
             text.font = Resources.GetBuiltinResource<Font>("LegacyRuntime.ttf");
+            text.material = ShadowCastUIStyle.Material;
+            target.AddComponent<Shadow>().effectDistance = new Vector2(1.5f, -1.5f);
             text.text = content;
             text.fontSize = fontSize;
             text.alignment = alignment;
@@ -421,7 +451,7 @@ namespace ShadowCast.Core.Campaign
             colors.highlightedColor = new Color(1.2f, 1.2f, 1.2f, 1f);
             colors.pressedColor = new Color(0.72f, 0.72f, 0.72f, 1f);
             button.colors = colors;
-            Text text = CreateText("Label", image.transform, Vector2.zero, size - new Vector2(20f, 8f), label, 22, TextAnchor.MiddleCenter);
+            Text text = CreateText("Label", image.transform, Vector2.zero, size - new Vector2(20f, 8f), label, 28, TextAnchor.MiddleCenter);
             text.color = Color.white;
             if (action != null) button.onClick.AddListener(() => action());
             return button;

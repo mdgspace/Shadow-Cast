@@ -4,6 +4,7 @@ using UnityEngine.InputSystem;
 using UnityEngine.InputSystem.XR;
 using UnityEngine.XR.Hands;
 using UnityEngine.XR.Management;
+using UnityEngine.Rendering.Universal;
 using Handedness = Oculus.Interaction.Input.Handedness;
 
 namespace ShadowCast.Core.Campaign
@@ -25,6 +26,7 @@ namespace ShadowCast.Core.Campaign
         public static void EnsureCameraTracking(Camera camera)
         {
             if (camera == null) return;
+            ConfigureStereoCamera(camera);
             var modernDriver = camera.GetComponent<TrackedPoseDriver>();
             var legacyDriver = camera.GetComponent<UnityEngine.SpatialTracking.TrackedPoseDriver>();
             if (modernDriver != null && legacyDriver != null) legacyDriver.enabled = false;
@@ -52,6 +54,14 @@ namespace ShadowCast.Core.Campaign
             // tracking only when the scene has explicitly provided its own rig.
             var input = XRGeneralSettings.Instance?.Manager?.activeLoader?.GetLoadedSubsystem<UnityEngine.XR.XRInputSubsystem>();
             input?.TrySetTrackingOriginMode(UnityEngine.XR.TrackingOriginModeFlags.Device);
+        }
+
+        public static void ConfigureStereoCamera(Camera camera)
+        {
+            if (camera == null) return;
+            camera.stereoTargetEye = StereoTargetEyeMask.Both;
+            camera.GetUniversalAdditionalCameraData().allowXRRendering = true;
+            camera.nearClipPlane = Mathf.Min(camera.nearClipPlane, .03f);
         }
 
         public static bool RawButton(string name) => actions != null && actions.FindAction("XR/" + name)?.IsPressed() == true;
@@ -121,6 +131,33 @@ namespace ShadowCast.Core.Campaign
 
         public static bool TryPointer(Handedness side, out Pose pose)
         {
+            return TryHandPointer(side, out pose) || TryControllerPointer(side == Handedness.Left, out pose);
+        }
+
+        public static bool TryIndexTip(Handedness side, out Pose pose)
+        {
+            IHand hand = TrackedHands.Find(side);
+            if (hand != null && hand.GetJointPose(HandJointId.HandIndexTip, out pose)) return true;
+            return TryJoint(side, XRHandJointID.IndexTip, out pose);
+        }
+
+        public static float IndexPinchStrength(Handedness side)
+        {
+            IHand hand = TrackedHands.Find(side);
+            if (hand != null) return Mathf.Max(hand.GetFingerPinchStrength(HandFinger.Index), hand.GetIndexFingerIsPinching() ? 1f : 0f);
+            MetaAimHand aim = side == Handedness.Left ? MetaAimHand.left : MetaAimHand.right;
+            if (aim != null && aim.added && ((MetaAimFlags)aim.aimFlags.ReadValue() & MetaAimFlags.Valid) != 0)
+            {
+                if (((MetaAimFlags)aim.aimFlags.ReadValue() & MetaAimFlags.SystemGesture) != 0) return 0;
+                return aim.pinchStrengthIndex.ReadValue();
+            }
+            if (TryIndexTip(side, out Pose index) && TryJoint(side, XRHandJointID.ThumbTip, out Pose thumb))
+                return 1f - Mathf.InverseLerp(.018f, .05f, Vector3.Distance(index.position, thumb.position));
+            return 0;
+        }
+
+        public static bool TryHandPointer(Handedness side, out Pose pose)
+        {
             IHand hand = TrackedHands.Find(side);
             if (hand != null && hand.GetPointerPose(out pose)) return true;
             MetaAimHand aim = side == Handedness.Left ? MetaAimHand.left : MetaAimHand.right;
@@ -129,8 +166,20 @@ namespace ShadowCast.Core.Campaign
                 pose = ToWorld(new Pose(aim.devicePosition.ReadValue(), aim.deviceRotation.ReadValue()));
                 return true;
             }
-            if (!TryControllerPose(side == Handedness.Left, out pose)) return false;
-            string prefix = side == Handedness.Left ? "Left" : "Right";
+            if (TryIndexTip(side, out Pose index) && TryJoint(side, XRHandJointID.IndexProximal, out Pose knuckle))
+            {
+                Vector3 direction = index.position - knuckle.position;
+                if (direction.sqrMagnitude > .000001f)
+                { pose = new Pose(index.position, Quaternion.LookRotation(direction, Vector3.up)); return true; }
+            }
+            pose = default;
+            return false;
+        }
+
+        public static bool TryControllerPointer(bool left, out Pose pose)
+        {
+            if (!TryControllerPose(left, out pose)) return false;
+            string prefix = left ? "Left" : "Right";
             InputAction rotation = actions.FindAction("XR/" + prefix + "PointerRotation");
             if (rotation.controls.Count > 0)
             {

@@ -66,14 +66,14 @@ public static class ShadowCastPlayModeChecks
                 if (elapsed < 30) return;
                 if (Vector3.Distance(origin.position, expectedPosition) > .01f)
                     throw new Exception("XR origin drifted while idle: " + origin.position);
-                var artwork = GameObject.Find("Figma Artwork")?.GetComponent<UnityEngine.UI.RawImage>();
-                if (artwork == null || !artwork.isActiveAndEnabled || artwork.texture == null)
-                    throw new Exception("Main menu artwork is not active.");
+                var artwork = GameObject.Find("Figma UmbraLogo")?.GetComponent<UnityEngine.UI.Image>();
+                if (artwork == null || !artwork.isActiveAndEnabled || artwork.sprite == null)
+                    throw new Exception("Figma logo is not active.");
                 Vector3 viewport = camera.WorldToViewportPoint(artwork.transform.position);
                 if (viewport.z <= 0 || viewport.x < 0 || viewport.x > 1 || viewport.y < 0 || viewport.y > 1)
                     throw new Exception("Main menu left the camera view: " + viewport);
                 startupReport.passed.Add("XR origin remains stationary for 30 seconds without a world floor");
-                startupReport.passed.Add("Main menu artwork is active and in the camera view");
+                startupReport.passed.Add("Individual Figma logo is active and in the camera view");
                 if (shifted) startupReport.passed.Add("Menu follows a delayed tracking-origin change after five seconds");
                 startupReport.status = "passed";
             }
