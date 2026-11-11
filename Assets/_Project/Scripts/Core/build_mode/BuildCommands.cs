@@ -12,7 +12,7 @@ namespace ShadowCast.Core.BuildMode
         private readonly Action<GameObject> _onRestore;
         private readonly Action<GameObject> _onDestroy;
 
-        public string Description => $"Spawn {_spawnedInstance.name}";
+        public string Description => _spawnedInstance != null ? $"Spawn {_spawnedInstance.name}" : "Spawn removed object";
 
         public SpawnCommand(GameObject instance, Action<GameObject> onRestore = null, Action<GameObject> onDestroy = null)
         {
@@ -54,7 +54,7 @@ namespace ShadowCast.Core.BuildMode
         private readonly Action<GameObject> _onDeleted;
         private readonly Action<GameObject> _onRestored;
 
-        public string Description => $"Delete {_targetObject.name}";
+        public string Description => _targetObject != null ? $"Delete {_targetObject.name}" : "Delete removed object";
 
         public DeleteCommand(GameObject targetObject, Action<GameObject> onDeleted = null, Action<GameObject> onRestored = null)
         {
@@ -100,7 +100,7 @@ namespace ShadowCast.Core.BuildMode
         private readonly Quaternion _endRotation;
         private readonly Vector3 _endScale;
 
-        public string Description => $"Transform {_target.name}";
+        public string Description => _target != null ? $"Transform {_target.name}" : "Transform removed object";
 
         public TransformCommand(
             Transform target,

@@ -58,7 +58,7 @@ namespace ShadowCast.Core.BuildMode
         public ShadowWallBaker WallBaker
         {
             get => _shadowWallBaker;
-            set => _shadowWallBaker = value;
+            set { _shadowWallBaker = value; if (value != null) value.bakeLight = _lightSource; }
         }
 
         public Transform TargetWallPlane
@@ -78,7 +78,7 @@ namespace ShadowCast.Core.BuildMode
         public Light LightSource
         {
             get => _lightSource;
-            set => _lightSource = value;
+            set { _lightSource = value; if (_shadowWallBaker != null) _shadowWallBaker.bakeLight = value; }
         }
 
         private void Awake()
@@ -115,6 +115,7 @@ namespace ShadowCast.Core.BuildMode
             }
 
             // Sync wall reference to ShadowWallBaker
+            if (_shadowWallBaker != null) _shadowWallBaker.bakeLight = _lightSource;
             if (_shadowWallBaker != null && _targetWallPlane != null && _shadowWallBaker.wall == null)
             {
                 _shadowWallBaker.wall = _targetWallPlane.GetComponent<MeshFilter>();
@@ -128,7 +129,7 @@ namespace ShadowCast.Core.BuildMode
         {
             if (_currentState == BakeState.Baking) return;
             _requestedCharacterSpawnPos = characterSpawnPoint;
-            StartCoroutine(ExecuteBakeRoutine(buildObjects));
+            StartCoroutine(ExecuteSafely(buildObjects != null ? new List<BuildableObject>(buildObjects) : new List<BuildableObject>()));
         }
 
         /// <summary>
@@ -136,6 +137,8 @@ namespace ShadowCast.Core.BuildMode
         /// </summary>
         public void Unbake()
         {
+            StopAllCoroutines();
+            _requestedCharacterSpawnPos = null;
             if (_shadowWallBaker != null)
             {
                 _shadowWallBaker.ClearBakedPlatforms();
@@ -159,6 +162,25 @@ namespace ShadowCast.Core.BuildMode
             _currentState = BakeState.Idle;
             OnBakeStateChanged?.Invoke(_currentState);
             OnUnbaked?.Invoke();
+        }
+
+        private IEnumerator ExecuteSafely(List<BuildableObject> buildObjects)
+        {
+            IEnumerator routine = ExecuteBakeRoutine(buildObjects);
+            while (true)
+            {
+                bool more;
+                try { more = routine.MoveNext(); }
+                catch (Exception exception)
+                {
+                    Unbake();
+                    Debug.LogWarning($"[ShadowBakePipeline] Bake failed: {exception.Message}", this);
+                    OnBakeFailed?.Invoke("The shadow bake failed. Adjust the level and try again.");
+                    yield break;
+                }
+                if (!more) yield break;
+                yield return routine.Current;
+            }
         }
 
         private IEnumerator ExecuteBakeRoutine(List<BuildableObject> buildObjects)
@@ -188,7 +210,7 @@ namespace ShadowCast.Core.BuildMode
             }
             else
             {
-                int namedLayer = LayerMask.NameToLayer("ShadowCasters");
+                int namedLayer = LayerMask.NameToLayer("ShadowCaster");
                 if (namedLayer != -1) casterLayer = namedLayer;
             }
 
@@ -229,6 +251,11 @@ namespace ShadowCast.Core.BuildMode
             }
 
             bool movingShadowSucceeded = false;
+            if (_targetWallPlane != null && _targetWallPlane.Find("BakedShadowPlatforms") == null)
+            {
+                var root = new GameObject("BakedShadowPlatforms");
+                root.transform.SetParent(_targetWallPlane, false);
+            }
             for (int i = 0; i < _activeMovingShadows.Count; i++)
                 if (_activeMovingShadows[i] != null)
                     movingShadowSucceeded |= _activeMovingShadows[i].CreateBakedShadow(_targetWallPlane);

@@ -48,6 +48,10 @@ namespace ShadowCast.Core.BuildMode
         private GameObject _simulatedLeftAnchor;
         private float _editorGrabDistance = 1.5f;
         private Vector3 _lastMousePos;
+        private ShadowCastHeadsetUI _campaignUI;
+        private CampaignFlowController _campaignFlow;
+        private bool _hasTrackedAnchor;
+        private bool _waitForGrabRelease;
 
         private void Awake()
         {
@@ -68,11 +72,12 @@ namespace ShadowCast.Core.BuildMode
 
         private void Start()
         {
-            if (Application.isMobilePlatform || XRSettings.isDeviceActive)
-            {
-                _enableEditorSimulation = false;
-                _showDebugGUI = false;
-            }
+            // Required components can Awake before BuildModeManager has assigned its fields.
+            _manipulator = _buildModeManager != null ? _buildModeManager.Manipulator : _manipulator;
+            _undoRedo = _buildModeManager != null ? _buildModeManager.UndoRedoManager : _undoRedo;
+            _campaignUI = FindAnyObjectByType<ShadowCastHeadsetUI>();
+            _campaignFlow = FindAnyObjectByType<CampaignFlowController>();
+            AutoDetectRig();
             if (_boundingVolume != null)
             {
                 _boundingVolume.OnBoundaryHit += HandleBoundaryHit;
@@ -122,6 +127,7 @@ namespace ShadowCast.Core.BuildMode
         /// <summary>Uses live XR controller poses as movable hand anchors when the rig has no named hand transforms.</summary>
         public void ConfigureInputAnchors(Transform rightPinchAnchor, Transform leftPointAnchor, Camera headsetCamera)
         {
+            _hasTrackedAnchor = rightPinchAnchor != null;
             if (rightPinchAnchor == null) return;
             _rightPinchAnchor = rightPinchAnchor;
             _leftPointAnchor = leftPointAnchor;
@@ -163,24 +169,54 @@ namespace ShadowCast.Core.BuildMode
         private bool undoWasDown, redoWasDown;
         private void Update()
         {
-            if (_buildModeManager != null && (!_buildModeManager.IsBuildMode ||
+            if (Time.timeScale <= 0f || (_campaignUI != null && _campaignUI.BlocksBuildInput) ||
+                (_buildModeManager != null && (!_buildModeManager.IsBuildMode ||
                 (_buildModeManager.BakePipeline != null && _buildModeManager.BakePipeline.CurrentState == BakeState.Baking)))
+                )
             {
                 if (_wasPinching) _manipulator?.ReleasePinchGrab();
                 _wasPinching = false;
+                _waitForGrabRelease = true;
                 return;
             }
-            bool pinch = TrackedHands.Pinch(Handedness.Right, HandFinger.Index);
-            if (pinch && !_wasPinching) _manipulator?.BeginPinchGrab();
+            if (_enableEditorSimulation && !XRSettings.isDeviceActive)
+            {
+                // Do not run VR release detection over the desktop drag state.
+                if (_simulatedRightAnchor == null) { _rightPinchAnchor = null; SetupEditorSimulationAnchors(); }
+                _rightPinchAnchor = _simulatedRightAnchor.transform;
+                _manipulator?.ConfigureAnchors(_rightPinchAnchor, null, _headsetCamera);
+                UpdateEditorSimulation();
+                return;
+            }
+            bool pinch = _hasTrackedAnchor && (TrackedHands.Pinch(Handedness.Right, HandFinger.Index) || ShadowCastXRInput.RawButton("Grab"));
+            if (_waitForGrabRelease)
+            {
+                if (pinch) return;
+                _waitForGrabRelease = false;
+            }
+            if (pinch && !_wasPinching && _manipulator != null)
+            {
+                if (!_manipulator.BeginPinchGrab() && ShadowCastXRInput.TryPointer(Handedness.Right, out Pose pointing) &&
+                    Physics.Raycast(pointing.position, pointing.rotation * Vector3.forward, out RaycastHit hit, 10f, ~0, QueryTriggerInteraction.Ignore))
+                    _manipulator.BeginPinchGrab(hit.collider.gameObject);
+            }
             else if (!pinch && _wasPinching) _manipulator?.ReleasePinchGrab();
             _wasPinching = pinch;
-            bool undo = TrackedHands.Pinch(Handedness.Left, HandFinger.Middle);
-            bool redo = TrackedHands.Pinch(Handedness.Left, HandFinger.Ring);
+            bool undo = TrackedHands.Pinch(Handedness.Left, HandFinger.Middle) || ShadowCastXRInput.RawButton("Undo");
+            bool redo = TrackedHands.Pinch(Handedness.Left, HandFinger.Ring) || ShadowCastXRInput.RawButton("Redo");
             if (undo && !undoWasDown) _undoRedo?.Undo();
             if (redo && !redoWasDown) _undoRedo?.Redo();
             undoWasDown = undo; redoWasDown = redo;
-            if (_enableEditorSimulation) UpdateEditorSimulation();
         }
+
+        private void OnDisable()
+        {
+            _manipulator?.ReleasePinchGrab();
+            _wasPinching = undoWasDown = redoWasDown = false;
+            _waitForGrabRelease = true;
+        }
+
+        private void OnApplicationFocus(bool focused) { if (!focused) OnDisable(); }
 
         private void UpdateEditorSimulation()
         {
@@ -188,6 +224,11 @@ namespace ShadowCast.Core.BuildMode
             Mouse mouse = Mouse.current;
             Keyboard keyboard = Keyboard.current;
             Vector2 mousePosition = mouse.position.ReadValue();
+            if (mouse.leftButton.wasReleasedThisFrame)
+            {
+                _manipulator?.ReleasePinchGrab();
+                _wasPinching = false;
+            }
             if (!_headsetCamera.pixelRect.Contains(mousePosition)) return;
 
             // Toggle HUD overlay
@@ -259,7 +300,7 @@ namespace ShadowCast.Core.BuildMode
             if (keyboard != null && keyboard.zKey.wasPressedThisFrame) _buildModeManager?.Undo();
             if (keyboard != null && keyboard.yKey.wasPressedThisFrame) _buildModeManager?.Redo();
             if (keyboard != null && keyboard.gKey.wasPressedThisFrame) _buildModeManager?.ToggleGridSnap();
-            if (keyboard != null && keyboard.bKey.wasPressedThisFrame) _buildModeManager?.ToggleMode();
+            if (keyboard != null && keyboard.bKey.wasPressedThisFrame) TogglePlay();
             if (keyboard != null && (keyboard.deleteKey.wasPressedThisFrame || keyboard.backspaceKey.wasPressedThisFrame)) _buildModeManager?.DeleteSelected();
 
             _lastMousePos = mousePosition;
@@ -285,15 +326,22 @@ namespace ShadowCast.Core.BuildMode
                     : Vector3.forward * 1.2f;
 
                 _buildModeManager.SpawnObject(cube, spawnPos);
+                Destroy(cube);
             }
         }
 
         private void HandleBoundaryHit(Vector3 normal) { }
         public void TriggerHapticPulse() { }
 
+        private void TogglePlay()
+        {
+            if (_campaignFlow != null) _campaignFlow.BakeLevel();
+            else _buildModeManager?.ToggleMode();
+        }
+
         private void OnGUI()
         {
-            if (!_showDebugGUI || !_enableEditorSimulation) return;
+            if (!_showDebugGUI || !_enableEditorSimulation || XRSettings.isDeviceActive || (_campaignUI != null && _campaignUI.BlocksBuildInput)) return;
 
             GUILayout.BeginArea(new Rect(15, 15, 270, 290), "AR Shadow Build Mode (Editor HUD)", GUI.skin.window);
 
@@ -315,7 +363,7 @@ namespace ShadowCast.Core.BuildMode
 
             if (GUILayout.Button("[B] " + (_buildModeManager != null && _buildModeManager.IsPlayMode ? "Return to Build Mode" : "Bake Shadows & Play")))
             {
-                _buildModeManager?.ToggleMode();
+                TogglePlay();
             }
 
             GUILayout.BeginHorizontal();

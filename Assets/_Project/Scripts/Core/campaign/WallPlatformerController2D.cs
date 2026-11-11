@@ -82,7 +82,7 @@ namespace ShadowCast.Core.Campaign
             {
                 dashTimer -= Time.fixedDeltaTime;
                 SetGravityScale(0f);
-                body.linearVelocity = new Vector2(dashDirection * dashSpeed, 0f);
+                ApplyVelocity(new Vector2(dashDirection * dashSpeed, 0f));
                 jumpReleaseRequested = false;
                 CheckFallFailure();
                 return;
@@ -124,7 +124,7 @@ namespace ShadowCast.Core.Campaign
             if (jumpReleaseRequested && velocity.y > 0f) velocity.y *= jumpReleaseMultiplier;
             jumpReleaseRequested = false;
             velocity.y = Mathf.Max(velocity.y, -maxFallSpeed);
-            body.linearVelocity = velocity;
+            ApplyVelocity(velocity);
             CheckFallFailure();
         }
 
@@ -135,7 +135,7 @@ namespace ShadowCast.Core.Campaign
             dashTimer = dashDuration;
             dashRecoveryTimer = dashDuration + dashRecoveryTime;
             SetGravityScale(0f);
-            body.linearVelocity = new Vector2(dashDirection * dashSpeed, 0f);
+            ApplyVelocity(new Vector2(dashDirection * dashSpeed, 0f));
             AbilityUsesChanged?.Invoke(doubleJumpUses, dashUses);
         }
 
@@ -230,12 +230,19 @@ namespace ShadowCast.Core.Campaign
             if (softBlob != null) softBlob.SetGravityScale(value);
         }
 
+        private void ApplyVelocity(Vector2 velocity)
+        {
+            if (softBlob != null) softBlob.SetVelocity(velocity);
+            else body.linearVelocity = velocity;
+        }
+
         private void CheckFallFailure()
         {
             if (flowController == null || wallTransform == null) return;
             Vector3 localPosition = wallTransform.InverseTransformPoint(transform.position);
-            bool outsideSides = Mathf.Abs(localPosition.x) > wallTransform.localScale.x * 0.5f + 0.75f;
-            bool belowWall = localPosition.y < -wallTransform.localScale.y * 0.5f - 0.75f;
+            // InverseTransformPoint already removes the wall dimensions.
+            bool outsideSides = Mathf.Abs(localPosition.x) > 0.5f + 0.75f / Mathf.Abs(wallTransform.lossyScale.x);
+            bool belowWall = localPosition.y < -0.5f - 0.75f / Mathf.Abs(wallTransform.lossyScale.y);
             if (!outsideSides && !belowWall) return;
             SetControlsEnabled(false);
             flowController.FailLevel("You fell off the shadow path. Retry to rebuild this level.");

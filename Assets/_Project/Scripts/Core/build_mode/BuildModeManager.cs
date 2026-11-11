@@ -390,6 +390,8 @@ namespace ShadowCast.Core.BuildMode
         /// <summary>Clears runtime object registrations between independently authored levels.</summary>
         public void ResetForLevel()
         {
+            _manipulator?.ReleasePinchGrab();
+            _undoRedoManager?.ClearHistory();
             if (_bakePipeline != null && _bakePipeline.CurrentState != BakeState.Idle)
                 _bakePipeline.Unbake();
             _activeObjects.Clear();
@@ -400,6 +402,18 @@ namespace ShadowCast.Core.BuildMode
 
         public void UnregisterLevelObjects(IReadOnlyCollection<BuildableObject> objects)
         {
+            _manipulator?.ReleasePinchGrab();
+            _undoRedoManager?.ClearHistory();
+            // Palette spawns live in this container, outside the authored level root.
+            // Clear them as well so retrying cannot leave old casters in the next bake.
+            if (_objectsContainer != null)
+                for (int i = _objectsContainer.childCount - 1; i >= 0; i--)
+                {
+                    GameObject child = _objectsContainer.GetChild(i).gameObject;
+                    child.SetActive(false);
+                    Destroy(child);
+                }
+            _activeObjects.Clear();
             if (_bakePipeline != null && _bakePipeline.CurrentState != BakeState.Idle)
                 _bakePipeline.Unbake();
             if (objects != null)

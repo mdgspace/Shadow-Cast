@@ -1,8 +1,10 @@
 # Campaign authoring and quick start
 
+See [Quest Link validation and controller controls](VR_VALIDATION.md) for setup on the supported laptop and repeatable checks.
+
 ## Run the headset sample
 
-The sample experience starts automatically when a scene loads. It uses the tracked hands in the XR camera rig. Aim with the right hand and pinch the thumb and index finger to select a menu item. The menu is placed two metres in front of the headset and stays in place until another page opens. The mock wall is placed about 2.8 m ahead.
+The sample experience starts automatically when a scene loads. It accepts OpenXR controllers and tracked hands, with or without an authored Meta rig. Aim with the right hand and pinch the thumb and index finger to select a menu item. The menu is placed two metres in front of the headset and stays in place until another page opens. The mock wall is placed about 2.8 m ahead.
 
 In build mode, pinch the right thumb and index finger near an object to grab it. While holding it, pinch the left thumb and index finger and point to adjust depth. Pinch the right thumb and pinky to show or hide the build menu; pinch the right thumb and ring finger to open the object picker. Left thumb-middle and thumb-ring pinches undo and redo. During play, hold a left index pinch and move that hand left or right to move, use a right middle pinch to jump, right ring pinch to dash, and right pinky pinch to pause. Keyboard and mouse remain available for desktop testing.
 
@@ -17,7 +19,7 @@ The sample geometry and all sizes/positions are intentionally plain so those pla
 ## Add chapters and levels
 
 1. In the Project window, create a folder for the level, then choose **Assets → Create → Shadow Cast → Campaign → Level**. Give the asset a unique, permanent **ID** (for example `chapter-1-level-2`) and a player-facing **Display Name**. Never reuse or later change an ID after shipping because saves and scores use it.
-2. Set **Wall Width/Height**, **Character Start**, **Goal Position/Size**, and optional **Goal Condition Prefab**. All positions are wall-local: X is left/right, Y is up/down, and Z is the small offset toward/away from the wall.
+2. Set **Wall Width/Height**, **Character Start**, **Goal Position/Size**, and optional **Goal Condition Prefab**. Position offsets are in metres relative to the wall: X is left/right, Y is up/down, and negative Z points toward the player. Wall dimensions do not multiply these offsets.
 3. Add prefab entries under **Objects** and **Lights**. For each object, set a unique placement ID, prefab, wall-local transform, scale, and whether the player may move it. Use **GameObject → Shadow Cast** to create keys, power-ups, traps, normal objects, and moving-shadow prefabs, then drag those prefabs into this list.
 4. Under **Score & Hints**, choose the level's **Base Score**, **Minimum Score**, **Hint Penalty**, and ordered **Hints**. Each press reveals the next hint and subtracts the penalty, but never drops below the minimum.
 5. Create or select a chapter with **Assets → Create → Shadow Cast → Campaign → Chapter**, then add the new level to its **Levels** list in play order.
@@ -45,7 +47,7 @@ The campaign fallback character is the procedural soft Blob from `Assets/Blob`. 
 
 ## HUD, pause, settings, and local saves
 
-During play, the world-space HUD shows the remaining consumable **Double Jump** and **Dash** uses and provides large Jump, Dash, and Pause buttons. Press **Escape** on desktop or the right-controller menu button in XR to pause. The pause menu supports Resume, Save Game, Load Last Save, Settings, and Return to Main Menu. Settings currently include master volume and reduced-motion UI tracking and are persisted immediately.
+During play, the world-space HUD shows the remaining consumable **Double Jump** and **Dash** uses and provides large Jump, Dash, and Pause buttons. Press **Escape** on desktop or the left-controller menu button in XR to pause. The pause menu supports Resume, Save Game, Load Last Save, Settings, and Return to Main Menu. Settings currently include master volume and reduced-motion UI tracking and are persisted immediately.
 
 The HUD also shows the current level score and a **Hint** button. Hints are revealed in the same order as the level asset's **Hints** list. Every newly revealed hint applies the configured penalty exactly once; pressing after the last hint does not cost points. Completion shows the run score, that level's saved best, and the campaign total. Replaying a level can improve its saved best score, while the campaign total is the sum of best scores rather than a farmable sum of every run.
 

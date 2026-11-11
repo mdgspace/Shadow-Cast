@@ -24,6 +24,8 @@ namespace ShadowCast.Core.Campaign
             }
             flowController.CompleteLevel();
         }
+
+        private void OnTriggerStay2D(Collider2D other) => OnTriggerEnter2D(other);
     }
 
     /// <summary>Future key/lock or objective components can gate the common level goal through this contract.</summary>

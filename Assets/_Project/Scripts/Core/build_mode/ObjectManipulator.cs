@@ -118,6 +118,8 @@ namespace ShadowCast.Core.BuildMode
         /// </summary>
         public bool BeginPinchGrab(GameObject target = null)
         {
+            if (_rightHandPinchAnchor == null || Time.timeScale <= 0f) return false;
+            if (_grabbedObject != null) ReleasePinchGrab();
             if (target == null)
             {
                 target = DetectGrabbableAtPinchPoint();
@@ -140,7 +142,8 @@ namespace ShadowCast.Core.BuildMode
             else
             {
                 _grabbedBuildable = target.GetComponentInParent<BuildableObject>();
-                if (_grabbedBuildable != null && _grabbedBuildable.IsLocked)
+                if (_grabbedBuildable == null) return false;
+                if (_grabbedBuildable.IsLocked)
                 {
                     OnManipulationBlocked?.Invoke("This object is fixed and cannot be moved.");
                     return false;
@@ -159,6 +162,8 @@ namespace ShadowCast.Core.BuildMode
             _previousWristAngle = GetWristRollAngle();
             _currentDepthOffset = 0f;
             _reversalTimes.Clear();
+            _lastHandPos = _rightHandPinchAnchor.position;
+            _lastVelocityDir = Vector3.zero;
 
             OnObjectGrabbed?.Invoke(_grabbedObject);
             return true;
@@ -383,7 +388,8 @@ namespace ShadowCast.Core.BuildMode
 
             for (int i = 0; i < hits.Length; i++)
             {
-                float dist = Vector3.Distance(_rightHandPinchAnchor.position, hits[i].transform.position);
+                if (hits[i].GetComponentInParent<BuildableObject>() == null && hits[i].GetComponentInParent<LightSourceManipulator>() == null) continue;
+                float dist = Vector3.Distance(_rightHandPinchAnchor.position, hits[i].ClosestPoint(_rightHandPinchAnchor.position));
                 if (dist < minDistance)
                 {
                     minDistance = dist;

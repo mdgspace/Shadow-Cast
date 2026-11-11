@@ -11,9 +11,6 @@ using Oculus.Interaction.Input;
 using HandFinger = Oculus.Interaction.Input.HandFinger;
 using Hand = Oculus.Interaction.Input.Hand;
 using ShadowCast.Core.BuildMode;
-using InputDevice = UnityEngine.XR.InputDevice;
-using InputDevices = UnityEngine.XR.InputDevices;
-using CommonUsages = UnityEngine.XR.CommonUsages;
 
 namespace ShadowCast.Core.Campaign
 {
@@ -56,6 +53,7 @@ namespace ShadowCast.Core.Campaign
                 cameraObject.AddComponent<AudioListener>();
             }
 
+            ShadowCastXRInput.EnsureCameraTracking(camera);
             MixedRealityPassthroughBootstrap.Ensure(gameObject, camera);
             EnsureEventSystem();
             BuildModeManager build = FindAnyObjectByType<BuildModeManager>();
@@ -101,8 +99,8 @@ namespace ShadowCast.Core.Campaign
             level.name = "First Light";
             SetField(level, "id", "first-light"); SetField(level, "displayName", "First Light");
             SetField(level, "wallWidth", 3.2f); SetField(level, "wallHeight", 2.1f);
-            SetField(level, "characterStartWallLocalPosition", new Vector3(-1.35f, -0.50f, 0.035f));
-            SetField(level, "goalWallLocalPosition", new Vector3(1.30f, -0.50f, 0.035f));
+            SetField(level, "characterStartWallLocalPosition", new Vector3(-0.92f, -0.40f, -0.035f));
+            SetField(level, "goalWallLocalPosition", new Vector3(1.30f, -0.50f, -0.035f));
             SetField(level, "goalSize", new Vector2(0.24f, 0.36f));
             SetField(level, "baseScore", 1000);
             SetField(level, "minimumScore", 200);
@@ -138,7 +136,7 @@ namespace ShadowCast.Core.Campaign
             lamp.transform.position = new Vector3(10000f, 10000f, 10000f);
             spot.type = LightType.Spot;
             spot.color = new Color(1f, 0.88f, 0.62f);
-            spot.intensity = 1800f;
+            spot.intensity = 3f;
             spot.range = 8f;
             spot.spotAngle = 65f;
             spot.shadows = LightShadows.Hard;
@@ -183,9 +181,9 @@ namespace ShadowCast.Core.Campaign
 
         private static void EnsureEventSystem()
         {
-            if (EventSystem.current != null) return;
+            if (EventSystem.current != null) { EventSystem.current.sendNavigationEvents = false; return; }
             GameObject eventSystem = new GameObject("EventSystem");
-            eventSystem.AddComponent<EventSystem>();
+            eventSystem.AddComponent<EventSystem>().sendNavigationEvents = false;
             eventSystem.AddComponent<InputSystemUIInputModule>();
         }
     }
@@ -194,14 +192,24 @@ namespace ShadowCast.Core.Campaign
     {
         private static int cachedFrame = -1;
         private static IHand leftHand, rightHand;
+        private static Hand[] candidates = Array.Empty<Hand>();
+        private static float nextScan;
+        [RuntimeInitializeOnLoadMethod(RuntimeInitializeLoadType.SubsystemRegistration)]
+        private static void Reset()
+        { cachedFrame = -1; leftHand = rightHand = null; candidates = Array.Empty<Hand>(); nextScan = 0f; }
         public static IHand Find(Handedness side)
         {
             if (cachedFrame == Time.frameCount) return side == Handedness.Left ? leftHand : rightHand;
             cachedFrame = Time.frameCount;
             leftHand = rightHand = null;
-            foreach (var hand in UnityEngine.Object.FindObjectsByType<Hand>(FindObjectsInactive.Exclude))
+            if (Time.unscaledTime >= nextScan)
             {
-                if (!hand.IsConnected || !hand.IsTrackedDataValid) continue;
+                candidates = UnityEngine.Object.FindObjectsByType<Hand>(FindObjectsInactive.Exclude);
+                nextScan = Time.unscaledTime + .5f;
+            }
+            foreach (var hand in candidates)
+            {
+                if (hand == null || !hand.isActiveAndEnabled || !hand.IsConnected || !hand.IsTrackedDataValid) continue;
                 string path = hand.transform.name;
                 for (Transform parent = hand.transform.parent; parent != null; parent = parent.parent) path += "/" + parent.name;
                 if (path.IndexOf("Controller", StringComparison.OrdinalIgnoreCase) >= 0 || path.IndexOf("Synthetic", StringComparison.OrdinalIgnoreCase) >= 0) continue;
@@ -210,8 +218,9 @@ namespace ShadowCast.Core.Campaign
             return side == Handedness.Left ? leftHand : rightHand;
         }
         public static bool Pinch(Handedness side, HandFinger finger)
-        { IHand hand = Find(side); return hand != null && hand.GetFingerIsPinching(finger); }
+        { IHand hand = Find(side); return hand != null ? hand.GetFingerIsPinching(finger) : ShadowCastXRInput.Pinch(side, finger); }
     }
+    [DefaultExecutionOrder(-100)]
     public sealed class XRHandAnchorDriver : MonoBehaviour
     {
         private Transform rightAnchor, leftAnchor;
@@ -223,13 +232,24 @@ namespace ShadowCast.Core.Campaign
         {
             IHand right = TrackedHands.Find(Handedness.Right);
             IHand left = TrackedHands.Find(Handedness.Left);
-            if (right != null && right.GetJointPose(HandJointId.HandIndexTip, out Pose index) && right.GetJointPose(HandJointId.HandThumbTip, out Pose thumb))
-            {
-                rightAnchor.SetPositionAndRotation((index.position + thumb.position) * .5f, index.rotation);
-                if (build != null && build.InputBridge != null)
-                    build.InputBridge.ConfigureInputAnchors(rightAnchor, left != null && left.GetIndexFingerIsPinching() ? leftAnchor : null, view);
-            }
-            if (left != null && left.GetJointPose(HandJointId.HandIndexTip, out Pose point)) leftAnchor.SetPositionAndRotation(point.position, point.rotation);
+            bool rightValid = TryPinchPose(right, Handedness.Right, out Pose rightPose) || ShadowCastXRInput.TryControllerPose(false, out rightPose);
+            bool leftValid = TryPinchPose(left, Handedness.Left, out Pose leftPose) || ShadowCastXRInput.TryControllerPose(true, out leftPose);
+            if (rightValid) rightAnchor.SetPositionAndRotation(rightPose.position, rightPose.rotation);
+            if (leftValid) leftAnchor.SetPositionAndRotation(leftPose.position, leftPose.rotation);
+            if (build != null && build.InputBridge != null)
+                build.InputBridge.ConfigureInputAnchors(rightValid ? rightAnchor : null,
+                    leftValid && (TrackedHands.Pinch(Handedness.Left, HandFinger.Index) || ShadowCastXRInput.RawButton("Depth")) ? leftAnchor : null, view);
+        }
+
+        private static bool TryPinchPose(IHand hand, Handedness side, out Pose pose)
+        {
+            pose = default;
+            if (hand != null && hand.GetJointPose(HandJointId.HandIndexTip, out Pose index) && hand.GetJointPose(HandJointId.HandThumbTip, out Pose thumb))
+            { pose = new Pose((index.position + thumb.position) * .5f, index.rotation); return true; }
+            if (!ShadowCastXRInput.TryJoint(side, UnityEngine.XR.Hands.XRHandJointID.IndexTip, out index) ||
+                !ShadowCastXRInput.TryJoint(side, UnityEngine.XR.Hands.XRHandJointID.ThumbTip, out thumb)) return false;
+            pose = new Pose((index.position + thumb.position) * .5f, index.rotation);
+            return true;
         }
     }
 
@@ -247,7 +267,6 @@ namespace ShadowCast.Core.Campaign
         private readonly List<Button> hitboxes = new List<Button>();
         private readonly Dictionary<Button, float> movementHitboxes = new Dictionary<Button, float>();
         private readonly List<RaycastResult> rayResults = new List<RaycastResult>();
-        private InputDevice rightController;
         private bool triggerWasDown;
         private bool toggleWasDown;
         private bool pickerWasDown;
@@ -261,6 +280,7 @@ namespace ShadowCast.Core.Campaign
         private GameObject blockPrefab, rampPrefab, orbPrefab;
         private CampaignScreen currentScreen;
         private float initialCanvasPlacementDeadline;
+        public bool BlocksBuildInput => currentScreen != CampaignScreen.Build || canvasVisible || (gameplayHud != null && gameplayHud.IsPaused);
 
         public void Initialize(CampaignFlowController controller, BuildModeManager manager, Camera playerCamera, ShadowCastExperienceBootstrap experience, CampaignGameplayHUD hud, WallPlacementController placement)
         {
@@ -286,6 +306,7 @@ namespace ShadowCast.Core.Campaign
             canvas = go.GetComponent<Canvas>(); canvas.renderMode = RenderMode.WorldSpace; canvas.worldCamera = view;
             canvas.GetComponent<CanvasScaler>().dynamicPixelsPerUnit = 1f;
             raycaster = go.GetComponent<GraphicRaycaster>();
+            raycaster.ignoreReversedGraphics = false;
             canvas.GetComponent<RectTransform>().sizeDelta = new Vector2(ArtWidth, ArtHeight);
             GameObject imageObject = new GameObject("Figma Artwork", typeof(RectTransform), typeof(RawImage));
             imageObject.transform.SetParent(go.transform, false);
@@ -429,7 +450,7 @@ namespace ShadowCast.Core.Campaign
             if (wallPlacement != null && wallPlacement.Confirm(flow)) return;
             Vector3 forward = Vector3.ProjectOnPlane(view.transform.forward, Vector3.up).normalized;
             if (forward.sqrMagnitude < 0.1f) forward = Vector3.forward;
-            Pose pose = new Pose(view.transform.position + forward * 2.8f, Quaternion.LookRotation(-forward, Vector3.up));
+            Pose pose = new Pose(view.transform.position + forward * 2.8f, Quaternion.LookRotation(forward, Vector3.up));
             flow.ConfirmWallPlacement(pose);
         }
 
@@ -440,9 +461,9 @@ namespace ShadowCast.Core.Campaign
             item.name = type == PrimitiveType.Cube ? "Buildable Block" : "Buildable Orb";
             Transform wall = build.TargetWallPlane;
             item.transform.position = wall != null
-                ? wall.TransformPoint(new Vector3(wallX, 0f, -0.52f))
+                ? wall.position + wall.rotation * new Vector3(wallX, 0f, -0.52f)
                 : view.transform.position + view.transform.forward * 1.8f + view.transform.right * wallX - view.transform.up * 0.12f;
-            item.transform.rotation = rotation.HasValue ? Quaternion.Euler(rotation.Value) : Quaternion.identity;
+            item.transform.rotation = (wall != null ? wall.rotation : Quaternion.identity) * (rotation.HasValue ? Quaternion.Euler(rotation.Value) : Quaternion.identity);
             item.transform.localScale = scale ?? (prefab != null ? prefab.transform.localScale * 0.32f : Vector3.one * 0.32f);
             int casterLayer = LayerMask.NameToLayer("ShadowCaster");
             SetLayerRecursively(item.transform, casterLayer >= 0 ? casterLayer : 7);
@@ -492,8 +513,9 @@ namespace ShadowCast.Core.Campaign
             bool overlayKeyDown = keyboard != null && keyboard.tabKey.isPressed;
             bool pauseKeyDown = keyboard != null && keyboard.escapeKey.isPressed;
             bool pickerDown = keyboard != null && keyboard.pKey.isPressed;
-            bool menuButtonDown = TrackedHands.Pinch(Handedness.Right, HandFinger.Pinky);
+            bool menuButtonDown = TrackedHands.Pinch(Handedness.Right, HandFinger.Pinky) || ShadowCastXRInput.RawButton("Menu");
             pickerDown |= TrackedHands.Pinch(Handedness.Right, HandFinger.Ring);
+            pickerDown |= ShadowCastXRInput.RawButton("Picker");
             bool pauseDown = pauseKeyDown || (flow.CurrentScreen == CampaignScreen.Play && menuButtonDown);
             bool overlayDown = overlayKeyDown || (flow.CurrentScreen == CampaignScreen.Build && menuButtonDown);
             if (pickerDown && !pickerWasDown && flow.CurrentScreen == CampaignScreen.Build)
@@ -532,31 +554,29 @@ namespace ShadowCast.Core.Campaign
         {
             Transform cameraTransform = view.transform;
             canvas.transform.position = cameraTransform.position + cameraTransform.forward * 2f;
-            // GraphicRaycaster considers this orientation front-facing for a world-space
-            // canvas viewed by the assigned event camera.
+            // Canvas local +X must agree with the viewer's right to avoid mirrored artwork.
             canvas.transform.rotation = Quaternion.LookRotation(cameraTransform.forward, cameraTransform.up);
         }
 
         private void PollPointer()
         {
             bool handTrigger = TrackedHands.Pinch(Handedness.Right, HandFinger.Index);
-            bool controllerTrigger = GetRightControllerTrigger();
+            bool controllerTrigger = ShadowCastXRInput.RawButton("Select");
             bool trigger = handTrigger || controllerTrigger;
             Mouse mouse = Mouse.current;
             Keyboard keyboard = Keyboard.current;
-            bool mouseClick = mouse != null && mouse.leftButton.wasPressedThisFrame;
-            bool mouseDown = mouse != null && mouse.leftButton.isPressed;
+            bool mouseClick = !XRSettings.isDeviceActive && mouse != null && mouse.leftButton.wasPressedThisFrame;
+            bool mouseDown = !XRSettings.isDeviceActive && mouse != null && mouse.leftButton.isPressed;
             bool keyboardClick = keyboard != null && (keyboard.enterKey.wasPressedThisFrame || keyboard.numpadEnterKey.wasPressedThisFrame || keyboard.spaceKey.wasPressedThisFrame);
             bool pointerDown = trigger || mouseDown;
             bool click = (trigger && !triggerWasDown) || mouseClick || keyboardClick;
             triggerWasDown = trigger;
             Vector2 pointerPosition = mouseClick || mouseDown ? mouse.position.ReadValue() : view.pixelRect.center;
-            if (!mouseClick && !mouseDown && handTrigger)
+            if (!mouseClick && !mouseDown && (handTrigger || controllerTrigger))
             {
-                IHand hand = TrackedHands.Find(Handedness.Right);
                 Transform target = gameplayHud != null && gameplayHud.IsPaused
                     ? gameplayHud.GetComponentInChildren<Canvas>()?.transform : canvas.transform;
-                if (hand == null || target == null || !hand.GetPointerPose(out Pose pointing)) return;
+                if (target == null || !ShadowCastXRInput.TryPointer(Handedness.Right, out Pose pointing)) { screenMoveInput = 0f; return; }
                 Ray ray = new Ray(pointing.position, pointing.rotation * Vector3.forward);
                 if (!new Plane(target.forward, target.position).Raycast(ray, out float distance)) return;
                 Vector3 screen = view.WorldToScreenPoint(ray.GetPoint(distance));
@@ -577,32 +597,20 @@ namespace ShadowCast.Core.Campaign
                 Button button = rayResults[i].gameObject.GetComponentInParent<Button>();
                 if (button != null && button.interactable) { hovered = button; break; }
             }
-            if (click && hovered != null) hovered.onClick.Invoke();
+            // Desktop clicks are dispatched by InputSystemUIInputModule. Only synthesize
+            // XR/gaze activation here, otherwise a single mouse click runs the callback twice.
+            if (click && hovered != null) { if (!mouseClick && !mouseDown) hovered.onClick.Invoke(); }
             else if (click && currentScreen == CampaignScreen.Build) SetCanvasVisible(false);
             screenMoveInput = currentScreen == CampaignScreen.Play && pointerDown && hovered != null && movementHitboxes.TryGetValue(hovered, out float movement)
                 ? movement
                 : 0f;
         }
 
-        private bool GetRightControllerTrigger()
-        {
-            if (!rightController.isValid)
-                rightController = InputDevices.GetDeviceAtXRNode(XRNode.RightHand);
-
-            if (!rightController.isValid ||
-                !rightController.TryGetFeatureValue(CommonUsages.triggerButton, out bool pressed))
-            {
-                return false;
-            }
-
-            return pressed;
-        }
-
         private void PollPlayInput()
         {
             if (character == null) character = FindAnyObjectByType<WallPlatformerController2D>();
             if (character == null) return;
-            float axis = 0f;
+            float axis = ShadowCastXRInput.Move;
             Keyboard keyboard = Keyboard.current;
             if (keyboard != null)
             {
@@ -611,8 +619,13 @@ namespace ShadowCast.Core.Campaign
             }
             bool jumpDown = keyboard != null && (keyboard.spaceKey.isPressed || keyboard.wKey.isPressed || keyboard.upArrowKey.isPressed);
             bool dashDown = keyboard != null && (keyboard.leftShiftKey.isPressed || keyboard.rightShiftKey.isPressed || keyboard.eKey.isPressed);
+            jumpDown |= ShadowCastXRInput.RawButton("Jump");
+            dashDown |= ShadowCastXRInput.RawButton("Dash");
             IHand leftHand = TrackedHands.Find(Handedness.Left);
             if (leftHand != null && leftHand.GetIndexFingerIsPinching() && leftHand.GetRootPose(out Pose wrist))
+                axis = Mathf.Clamp((view.transform.InverseTransformPoint(wrist.position).x + 0.25f) / 0.18f, -1f, 1f);
+            else if (TrackedHands.Pinch(Handedness.Left, HandFinger.Index) &&
+                ShadowCastXRInput.TryJoint(Handedness.Left, UnityEngine.XR.Hands.XRHandJointID.Wrist, out wrist))
                 axis = Mathf.Clamp((view.transform.InverseTransformPoint(wrist.position).x + 0.25f) / 0.18f, -1f, 1f);
             if (Mathf.Abs(screenMoveInput) > 0.01f) axis = screenMoveInput;
             jumpDown |= TrackedHands.Pinch(Handedness.Right, HandFinger.Middle);
@@ -648,24 +661,9 @@ namespace ShadowCast.Core.Campaign
     {
         public static void Ensure(GameObject host, Camera xrCamera)
         {
-            if (host == null) return;
-
-            // An underlay is only visible through transparent pixels in the eye camera.
-            if (xrCamera != null)
-            {
-                xrCamera.clearFlags = CameraClearFlags.SolidColor;
-                xrCamera.backgroundColor = Color.clear;
-            }
-
-            OVRManager manager = UnityEngine.Object.FindAnyObjectByType<OVRManager>();
-            if (manager == null) manager = host.AddComponent<OVRManager>();
-            manager.isInsightPassthroughEnabled = true;
-
-            OVRPassthroughLayer layer = UnityEngine.Object.FindAnyObjectByType<OVRPassthroughLayer>();
-            if (layer == null) layer = host.AddComponent<OVRPassthroughLayer>();
-            layer.hidden = false;
-            layer.textureOpacity = 1f;
-            layer.edgeRenderingEnabled = false;
+            if (host == null || xrCamera == null) return;
+            var state = host.AddComponent<ShadowCastPassthroughState>();
+            state.Initialize(xrCamera);
         }
     }
 }

@@ -31,7 +31,7 @@ namespace ShadowCast.Core.Campaign
             Ray ray = playerCamera.ViewportPointToRay(new Vector3(0.5f, 0.5f, 0f));
             bool found = Physics.Raycast(ray, out RaycastHit hit, maxDistance, roomWallMask, QueryTriggerInteraction.Ignore)
                 && Mathf.Abs(Vector3.Dot(hit.normal, Vector3.up)) < 0.35f;
-            SetCandidate(found, found ? new Pose(hit.point + hit.normal * wallStandOff, Quaternion.LookRotation(hit.normal, Vector3.up)) : default);
+            SetCandidate(found, found ? new Pose(hit.point + hit.normal * wallStandOff, Quaternion.LookRotation(-hit.normal, Vector3.up)) : default);
         }
 
         /// <summary>Adapter point for Meta Scene API or a project-specific wall-placement provider.</summary>

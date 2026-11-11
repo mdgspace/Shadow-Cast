@@ -24,6 +24,9 @@ public class ShadowWallBaker : MonoBehaviour
     [Tooltip("Optional camera override. The default dedicated snapshot camera is safer and does not modify the gameplay camera.")]
     public Camera snapshotCamera;
 
+    [Tooltip("Optional level light. Other scene lights are excluded during capture so they cannot wash out its shadows.")]
+    public Light bakeLight;
+
     [Tooltip("Use a temporary orthographic camera for baking. Keep enabled so the Main Camera is never modified.")]
     public bool useDedicatedSnapshotCamera = true;
 
@@ -108,6 +111,7 @@ public class ShadowWallBaker : MonoBehaviour
 
     private Material runtimeCrispMat;
     private Material runtimeSoftMat;
+    private readonly List<Mesh> generatedMeshes = new List<Mesh>();
 
     private static readonly int BaseColorId = Shader.PropertyToID("_BaseColor");
     private static readonly int FallbackColorId = Shader.PropertyToID("_Color");
@@ -318,10 +322,14 @@ public class ShadowWallBaker : MonoBehaviour
         Material[] originalMaterials = null;
         bool rootWasActive = bakedPlatformsRoot != null && bakedPlatformsRoot.gameObject.activeSelf;
         Texture2D snapshot = null;
+        var hiddenCasters = new List<Renderer>();
+        var casterModes = new List<UnityEngine.Rendering.ShadowCastingMode>();
+        var excludedLights = new List<Light>();
 
         // Capture the assigned camera state. The Main Camera is commonly reused as
         // the snapshot camera, so every property changed below must be restored.
         bool originalCameraEnabled = false;
+        StereoTargetEyeMask originalStereoTarget = StereoTargetEyeMask.Both;
         RenderTexture originalTargetTexture = null;
         CameraClearFlags originalClearFlags = CameraClearFlags.Skybox;
         Color originalBackgroundColor = Color.black;
@@ -372,6 +380,7 @@ public class ShadowWallBaker : MonoBehaviour
         if (!temporaryCamera)
         {
             originalCameraEnabled = cam.enabled;
+            originalStereoTarget = cam.stereoTargetEye;
             originalTargetTexture = cam.targetTexture;
             originalClearFlags = cam.clearFlags;
             originalBackgroundColor = cam.backgroundColor;
@@ -387,6 +396,7 @@ public class ShadowWallBaker : MonoBehaviour
 
         // Configure orthographic camera to tightly frame the wall surface
         cam.enabled = false;
+        cam.stereoTargetEye = StereoTargetEyeMask.None;
         cam.clearFlags = CameraClearFlags.SolidColor;
         cam.backgroundColor = Color.white;
         cam.orthographic = true;
@@ -429,12 +439,40 @@ public class ShadowWallBaker : MonoBehaviour
 
         try
         {
+            // Capture shadows on the wall, rather than the lit faces of the 3D
+            // source objects between the snapshot camera and the wall.
+            foreach (Renderer renderer in FindObjectsByType<Renderer>(FindObjectsInactive.Exclude))
+            {
+                if (renderer == wallRenderer || !IsOnLayerMask(renderer.gameObject.layer, shadowCasterLayer) ||
+                    !renderer.enabled || renderer.shadowCastingMode == UnityEngine.Rendering.ShadowCastingMode.Off) continue;
+                hiddenCasters.Add(renderer);
+                casterModes.Add(renderer.shadowCastingMode);
+                renderer.shadowCastingMode = UnityEngine.Rendering.ShadowCastingMode.ShadowsOnly;
+            }
+            if (bakeLight != null)
+                foreach (Light light in FindObjectsByType<Light>(FindObjectsInactive.Exclude))
+                    if (light != bakeLight && light.enabled) { excludedLights.Add(light); light.enabled = false; }
             cam.Render();
 
             // Readback to CPU Texture2D.
             RenderTexture.active = rt;
             snapshot = new Texture2D(resX, resY, TextureFormat.RGB24, false);
             snapshot.ReadPixels(new Rect(0, 0, resX, resY), 0, 0);
+            Color[] shadowPixels = snapshot.GetPixels();
+            // A point light naturally darkens the wall edges. Compare against an
+            // unoccluded capture so falloff cannot become a wall-sized quicksand zone.
+            foreach (Renderer renderer in hiddenCasters) renderer.enabled = false;
+            cam.Render();
+            RenderTexture.active = rt;
+            snapshot.ReadPixels(new Rect(0, 0, resX, resY), 0, 0);
+            Color[] litPixels = snapshot.GetPixels();
+            for (int i = 0; i < litPixels.Length; i++)
+            {
+                float lit = litPixels[i].grayscale;
+                float ratio = lit > .001f ? Mathf.Clamp01(shadowPixels[i].grayscale / lit) : 1f;
+                litPixels[i] = new Color(ratio, ratio, ratio, 1f);
+            }
+            snapshot.SetPixels(litPixels);
             snapshot.Apply(false, false);
             return snapshot;
         }
@@ -453,6 +491,9 @@ public class ShadowWallBaker : MonoBehaviour
         }
         finally
         {
+            for (int i = 0; i < hiddenCasters.Count; i++)
+                if (hiddenCasters[i] != null) { hiddenCasters[i].shadowCastingMode = casterModes[i]; hiddenCasters[i].enabled = true; }
+            foreach (Light light in excludedLights) if (light != null) light.enabled = true;
             if (wallRenderer != null && originalMaterials != null)
             {
                 wallRenderer.sharedMaterials = originalMaterials;
@@ -473,6 +514,7 @@ public class ShadowWallBaker : MonoBehaviour
                 else
                 {
                     cam.enabled = originalCameraEnabled;
+                    cam.stereoTargetEye = originalStereoTarget;
                     cam.targetTexture = originalTargetTexture;
                     cam.clearFlags = originalClearFlags;
                     cam.backgroundColor = originalBackgroundColor;
@@ -561,6 +603,7 @@ public class ShadowWallBaker : MonoBehaviour
             MeshFilter mf = go.AddComponent<MeshFilter>();
             MeshRenderer mr = go.AddComponent<MeshRenderer>();
             mf.sharedMesh = Create2DPolygonMesh(contour.wallSpacePoints, crispVisualColor);
+            generatedMeshes.Add(mf.sharedMesh);
             mr.sharedMaterial = runtimeCrispMat;
         }
 
@@ -604,6 +647,7 @@ public class ShadowWallBaker : MonoBehaviour
             tintedColor.a = Mathf.Lerp(0.85f, 0.45f, contour.softness);
 
             mf.sharedMesh = Create2DPolygonMesh(contour.wallSpacePoints, tintedColor);
+            generatedMeshes.Add(mf.sharedMesh);
             mr.sharedMaterial = runtimeSoftMat;
         }
 
@@ -775,11 +819,13 @@ public class ShadowWallBaker : MonoBehaviour
     [ContextMenu("Clear Baked Platforms")]
     public void ClearBakedPlatforms()
     {
+        ClearGeneratedMeshes();
         if (bakedPlatformsRoot != null)
         {
             for (int i = bakedPlatformsRoot.childCount - 1; i >= 0; i--)
             {
                 GameObject child = bakedPlatformsRoot.GetChild(i).gameObject;
+                child.SetActive(false);
                 if (Application.isPlaying) Destroy(child);
                 else DestroyImmediate(child);
             }
@@ -793,6 +839,7 @@ public class ShadowWallBaker : MonoBehaviour
 
     private void OnDestroy()
     {
+        ClearGeneratedMeshes();
         if (lastSnapshot != null)
         {
             if (Application.isPlaying)
@@ -819,6 +866,13 @@ public class ShadowWallBaker : MonoBehaviour
                 DestroyImmediate(runtimeSoftMat);
             runtimeSoftMat = null;
         }
+    }
+
+    private void ClearGeneratedMeshes()
+    {
+        foreach (Mesh generated in generatedMeshes)
+            if (generated != null) { if (Application.isPlaying) Destroy(generated); else DestroyImmediate(generated); }
+        generatedMeshes.Clear();
     }
 
     private void OnGUI()

@@ -418,73 +418,38 @@ public static class ShadowContourExtractor
         List<List<Vector2>> loops = new List<List<Vector2>>();
         if (segments == null || segments.Count == 0) return loops;
 
-        const float joinTolerance = 0.003f;
-        const float joinToleranceSqr = joinTolerance * joinTolerance;
+        // Adjacent pixels can be closer than 0.003 UV units. A fixed proximity
+        // threshold closed contours after only a few vertices at 512+ resolution.
+        // Shared cell edges have identical crossings; join their quantized endpoints.
+        Vector2Int Key(Vector2 p) => new Vector2Int(Mathf.RoundToInt(p.x * 1000000f), Mathf.RoundToInt(p.y * 1000000f));
+        var starts = new Dictionary<Vector2Int, List<int>>();
+        for (int i = 0; i < segments.Count; i++)
+        {
+            Vector2Int key = Key(segments[i].a);
+            if (!starts.TryGetValue(key, out List<int> bucket)) starts[key] = bucket = new List<int>();
+            bucket.Add(i);
+        }
         bool[] used = new bool[segments.Count];
-
         for (int i = 0; i < segments.Count; i++)
         {
             if (used[i]) continue;
-
-            List<Vector2> loop = new List<Vector2>();
-            used[i] = true;
-            loop.Add(segments[i].a);
-            loop.Add(segments[i].b);
-
-            Vector2 currentEnd = segments[i].b;
+            var loop = new List<Vector2>();
+            Vector2Int first = Key(segments[i].a);
+            int next = i;
             bool closed = false;
-
-            // Follow chain
-            for (int step = 0; step < segments.Count; step++)
+            for (int step = 0; step <= segments.Count; step++)
             {
-                int bestNext = -1;
-                float bestDistSqr = float.MaxValue;
-
-                for (int j = 0; j < segments.Count; j++)
-                {
-                    if (used[j]) continue;
-
-                    float distSqr = (segments[j].a - currentEnd).sqrMagnitude;
-                    if (distSqr < joinToleranceSqr && distSqr < bestDistSqr)
-                    {
-                        bestDistSqr = distSqr;
-                        bestNext = j;
-                    }
-                }
-
-                if (bestNext != -1)
-                {
-                    used[bestNext] = true;
-                    currentEnd = segments[bestNext].b;
-                    loop.Add(currentEnd);
-
-                    // Check if looped back to start
-                    if ((currentEnd - loop[0]).sqrMagnitude < joinToleranceSqr)
-                    {
-                        closed = true;
-                        break;
-                    }
-                }
-                else
-                {
-                    // Check if close enough to start to close loop (wider tolerance)
-                    if ((currentEnd - loop[0]).sqrMagnitude < joinToleranceSqr * 16f)
-                    {
-                        closed = true;
-                    }
-                    break;
-                }
+                used[next] = true;
+                loop.Add(segments[next].a);
+                Vector2Int end = Key(segments[next].b);
+                if (end == first) { closed = loop.Count >= 3; break; }
+                next = -1;
+                if (starts.TryGetValue(end, out List<int> candidates))
+                    foreach (int candidate in candidates)
+                        if (!used[candidate]) { next = candidate; break; }
+                if (next < 0) break;
             }
-
-            if (closed && loop.Count >= 3)
-            {
-                // Remove redundant duplicate end vertex
-                if ((loop[loop.Count - 1] - loop[0]).sqrMagnitude < joinToleranceSqr)
-                {
-                    loop.RemoveAt(loop.Count - 1);
-                }
-                loops.Add(loop);
-            }
+            if (closed) loops.Add(loop);
         }
 
         return loops;
@@ -495,7 +460,8 @@ public static class ShadowContourExtractor
     /// </summary>
     public static List<Vector2> SimplifyPolygonRDP(List<Vector2> points, float tolerance)
     {
-        if (points == null || points.Count <= 3 || tolerance <= 1e-6f)
+        if (points == null) return new List<Vector2>();
+        if (points.Count <= 3 || tolerance <= 1e-6f)
             return new List<Vector2>(points);
 
         // Find two points furthest apart to split the closed loop into two open chains

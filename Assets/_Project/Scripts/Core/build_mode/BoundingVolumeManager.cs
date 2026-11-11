@@ -37,7 +37,9 @@ namespace ShadowCast.Core.BuildMode
         public event Action<Vector3, float> OnBoundaryProximity; // (faceNormal, intensity 0..1)
         public event Action<Vector3> OnBoundaryHit;              // (faceNormal)
 
-        public Vector3 Center => transform.TransformPoint(_center);
+        private Transform wallBoundsSpace;
+        private Transform BoundsSpace => wallBoundsSpace != null ? wallBoundsSpace : transform;
+        public Vector3 Center => BoundsSpace.TransformPoint(_center);
         public Vector3 Size => _size;
         public float ProximityThreshold => _proximityThreshold;
 
@@ -45,8 +47,13 @@ namespace ShadowCast.Core.BuildMode
         public void ConfigureForWall(Transform wall, float wallWidth, float wallHeight)
         {
             if (wall == null) return;
-            transform.SetPositionAndRotation(wall.position, wall.rotation);
-            transform.localScale = Vector3.one;
+            if (wallBoundsSpace == null)
+            {
+                wallBoundsSpace = new GameObject("Build Bounds Space").transform;
+                wallBoundsSpace.SetParent(transform, false);
+            }
+            wallBoundsSpace.SetPositionAndRotation(wall.position, wall.rotation);
+            wallBoundsSpace.localScale = Vector3.one;
             _center = Vector3.zero;
             _size = new Vector3(Mathf.Max(1f, wallWidth + 1f), Mathf.Max(1f, wallHeight + 1f), 4f);
             _useOrientedBounds = true;
@@ -61,7 +68,7 @@ namespace ShadowCast.Core.BuildMode
                     return new Bounds(Center, _size);
                 }
                 // For OBB, return bounding AABB that encapsulates it
-                return new Bounds(Center, Vector3.Scale(_size, transform.lossyScale));
+                return new Bounds(Center, Vector3.Scale(_size, BoundsSpace.lossyScale));
             }
         }
 
@@ -87,9 +94,8 @@ namespace ShadowCast.Core.BuildMode
             if (_useOrientedBounds)
             {
                 // Transform to local space relative to bounding volume
-                Vector3 localPos = transform.InverseTransformPoint(targetWorldPos);
-                Vector3 localExtents = transform.InverseTransformVector(objectExtents);
-                localExtents = new Vector3(Mathf.Abs(localExtents.x), Mathf.Abs(localExtents.y), Mathf.Abs(localExtents.z));
+                Vector3 localPos = BoundsSpace.InverseTransformPoint(targetWorldPos);
+                Vector3 localExtents = LocalExtents(objectExtents);
 
                 Vector3 min = _center - halfSize + localExtents;
                 Vector3 max = _center + halfSize - localExtents;
@@ -106,7 +112,7 @@ namespace ShadowCast.Core.BuildMode
                 );
 
                 CheckBoundaryHits(localPos, min, max);
-                return transform.TransformPoint(clampedLocal);
+                return BoundsSpace.TransformPoint(clampedLocal);
             }
             else
             {
@@ -134,11 +140,10 @@ namespace ShadowCast.Core.BuildMode
         {
             if (_useOrientedBounds)
             {
-                Vector3 localPosition = transform.InverseTransformPoint(targetWorldPos);
-                Vector3 localExtents = transform.InverseTransformVector(objectExtents);
-                localExtents = new Vector3(Mathf.Abs(localExtents.x), Mathf.Abs(localExtents.y), Mathf.Abs(localExtents.z));
+                Vector3 localPosition = BoundsSpace.InverseTransformPoint(targetWorldPos);
+                Vector3 localExtents = LocalExtents(objectExtents);
                 localPosition.y = _center.y - (_size.y * 0.5f) + localExtents.y;
-                return transform.TransformPoint(localPosition);
+                return BoundsSpace.TransformPoint(localPosition);
             }
 
             targetWorldPos.y = Center.y - (_size.y * 0.5f) + objectExtents.y;
@@ -151,9 +156,10 @@ namespace ShadowCast.Core.BuildMode
         /// </summary>
         public void EvaluateProximity(Vector3 worldPos, Vector3 objectExtents)
         {
-            Vector3 localPos = _useOrientedBounds ? transform.InverseTransformPoint(worldPos) : worldPos;
+            Vector3 localPos = _useOrientedBounds ? BoundsSpace.InverseTransformPoint(worldPos) : worldPos;
             Vector3 center = _useOrientedBounds ? _center : Center;
             Vector3 halfSize = _size * 0.5f;
+            if (_useOrientedBounds) objectExtents = LocalExtents(objectExtents);
 
             Vector3 min = (center - halfSize) + objectExtents;
             Vector3 max = (center + halfSize) - objectExtents;
@@ -188,6 +194,15 @@ namespace ShadowCast.Core.BuildMode
             }
         }
 
+        private Vector3 LocalExtents(Vector3 extents)
+        {
+            Matrix4x4 matrix = BoundsSpace.worldToLocalMatrix;
+            return new Vector3(
+                Mathf.Abs(matrix.m00) * extents.x + Mathf.Abs(matrix.m01) * extents.y + Mathf.Abs(matrix.m02) * extents.z,
+                Mathf.Abs(matrix.m10) * extents.x + Mathf.Abs(matrix.m11) * extents.y + Mathf.Abs(matrix.m12) * extents.z,
+                Mathf.Abs(matrix.m20) * extents.x + Mathf.Abs(matrix.m21) * extents.y + Mathf.Abs(matrix.m22) * extents.z);
+        }
+
         private void TestFace(float dist, Vector3 normal, ref float maxProximity, ref Vector3 closestNormal)
         {
             if (dist <= _proximityThreshold)
@@ -196,7 +211,7 @@ namespace ShadowCast.Core.BuildMode
                 if (intensity > maxProximity)
                 {
                     maxProximity = intensity;
-                    closestNormal = _useOrientedBounds ? transform.TransformDirection(normal) : normal;
+                    closestNormal = _useOrientedBounds ? BoundsSpace.TransformDirection(normal) : normal;
                 }
             }
         }
@@ -229,7 +244,7 @@ namespace ShadowCast.Core.BuildMode
 
             if (_useOrientedBounds)
             {
-                Gizmos.matrix = transform.localToWorldMatrix;
+                Gizmos.matrix = BoundsSpace.localToWorldMatrix;
                 Gizmos.DrawCube(_center, _size);
                 Gizmos.color = _gizmoWireColor;
                 Gizmos.DrawWireCube(_center, _size);

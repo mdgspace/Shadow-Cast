@@ -38,6 +38,8 @@ namespace ShadowCast.Core.BuildMode
         private Material generatedMaterial;
         private Material sourceMaterial;
         private Mesh generatedMesh;
+        private Rigidbody2D generatedBody;
+        private float motionStartTime;
 
         public MovingShadowType MovementType => movementType;
         public bool HasGeneratedShadow => generatedShadow != null;
@@ -72,7 +74,8 @@ namespace ShadowCast.Core.BuildMode
             localSource.z = -0.004f;
             CalculateEndpoints(localSource);
             generatedShadow.transform.localPosition = endpointA;
-            journeyLength = Vector3.Distance(endpointA, endpointB);
+            journeyLength = Vector3.Distance(generatedShadow.transform.parent.TransformPoint(endpointA), generatedShadow.transform.parent.TransformPoint(endpointB));
+            motionStartTime = Time.time;
 
             PolygonCollider2D collider = generatedShadow.AddComponent<PolygonCollider2D>();
             Vector2[][] paths = ArrowCutoutGeometry.CreateColliderPaths(shadowSize, arrowHoleSize);
@@ -80,6 +83,7 @@ namespace ShadowCast.Core.BuildMode
             for (int i = 0; i < paths.Length; i++) collider.SetPath(i, paths[i]);
 
             Rigidbody2D body = generatedShadow.AddComponent<Rigidbody2D>();
+            generatedBody = body;
             body.bodyType = RigidbodyType2D.Kinematic;
             body.interpolation = RigidbodyInterpolation2D.Interpolate;
 
@@ -100,13 +104,15 @@ namespace ShadowCast.Core.BuildMode
             return true;
         }
 
-        private void Update()
+        private void FixedUpdate()
         {
             if (!Application.isPlaying) return;
             if (generatedShadow == null || journeyLength < 0.0001f) return;
             float duration = journeyLength / Mathf.Max(0.01f, speed);
-            float t = Mathf.PingPong(Time.time / duration, 1f);
-            generatedShadow.transform.localPosition = Vector3.Lerp(endpointA, endpointB, t);
+            float t = Mathf.PingPong((Time.time - motionStartTime) / duration, 1f);
+            Vector3 localPosition = Vector3.Lerp(endpointA, endpointB, t);
+            if (generatedBody != null)
+                generatedBody.MovePosition(generatedShadow.transform.parent.TransformPoint(localPosition));
         }
 
         public void RestoreBuildState()
@@ -166,6 +172,7 @@ namespace ShadowCast.Core.BuildMode
             DestroyGenerated(generatedMesh);
             DestroyGenerated(generatedMaterial);
             generatedShadow = null;
+            generatedBody = null;
             generatedMesh = null;
             generatedMaterial = null;
         }

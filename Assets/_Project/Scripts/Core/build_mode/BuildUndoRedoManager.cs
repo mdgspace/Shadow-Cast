@@ -51,7 +51,7 @@ namespace ShadowCast.Core.BuildMode
             _undoList.AddLast(command);
 
             // Enforce max history capacity
-            while (_undoList.Count > _maxHistoryCount)
+            while (_undoList.Count > Mathf.Max(1, _maxHistoryCount))
             {
                 _undoList.RemoveFirst();
             }

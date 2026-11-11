@@ -13,7 +13,7 @@ namespace ShadowCast.Core.Campaign
         [SerializeField] private GameObject characterPrefab;
         [SerializeField] private GameObject goalPrefab;
         [SerializeField] private ArcadeHandControls arcadeControls;
-        [SerializeField] private Vector3 characterWallOffset = new Vector3(0f, 0f, 0.02f);
+        [SerializeField] private Vector3 characterWallOffset = new Vector3(0f, 0f, -0.02f);
 
         private readonly List<BuildableObject> levelObjects = new List<BuildableObject>();
         private Transform runtimeRoot;
@@ -24,11 +24,13 @@ namespace ShadowCast.Core.Campaign
         private readonly List<LevelKeyPickup> levelKeys = new List<LevelKeyPickup>();
         private GameObject character;
         private LevelDefinition currentLevel;
+        private WallPlaySpace playSpace;
+        private readonly List<Transform> gameplayObjects = new List<Transform>();
 
         public LevelDefinition CurrentLevel => currentLevel;
         public Transform Wall => wall;
         public Vector3 CharacterStartWorldPosition => wall != null && currentLevel != null
-            ? wall.TransformPoint(currentLevel.CharacterStartWallLocalPosition + characterWallOffset)
+            ? WallPoint(currentLevel.CharacterStartWallLocalPosition + characterWallOffset)
             : Vector3.zero;
 
         private void Awake()
@@ -79,20 +81,27 @@ namespace ShadowCast.Core.Campaign
         {
             if (currentLevel == null) return;
             if (character != null) Destroy(character);
+            playSpace = runtimeRoot.gameObject.AddComponent<WallPlaySpace>();
+            playSpace.Initialize(wall);
+            playSpace.MoveToPhysics(wall.Find("BakedShadowPlatforms"));
+            foreach (Transform item in gameplayObjects) playSpace.MoveToPhysics(item);
+            spawnPosition = playSpace.ToPhysics(spawnPosition);
             character = characterPrefab != null
-                ? Instantiate(characterPrefab, spawnPosition, wall.rotation, runtimeRoot)
+                ? Instantiate(characterPrefab, spawnPosition, Quaternion.identity, runtimeRoot)
                 : CreatePrimitiveCharacter(spawnPosition);
+            playSpace.AddCharacter(character.transform);
 
             WallPlatformerController2D controller = character.GetComponent<WallPlatformerController2D>();
             if (controller == null) controller = character.AddComponent<WallPlatformerController2D>();
             controller.ResetAt(spawnPosition);
-            controller.ConfigureFailureBounds(flowController, wall);
+            controller.ConfigureFailureBounds(flowController, playSpace.PhysicsWall);
             if (arcadeControls != null) arcadeControls.SetCharacter(controller);
             currentLevel.MechanicHooks?.playStarted?.Invoke();
         }
 
         public void StopPlay()
         {
+            if (playSpace != null) { playSpace.Restore(); Destroy(playSpace); playSpace = null; }
             if (arcadeControls != null)
             {
                 arcadeControls.ReleaseControls();
@@ -113,7 +122,8 @@ namespace ShadowCast.Core.Campaign
             levelLights.Clear();
             lightManipulators.Clear();
             levelKeys.Clear();
-            if (runtimeRoot != null) Destroy(runtimeRoot.gameObject);
+            gameplayObjects.Clear();
+            if (runtimeRoot != null) { runtimeRoot.gameObject.SetActive(false); Destroy(runtimeRoot.gameObject); }
             runtimeRoot = null;
         }
 
@@ -149,7 +159,7 @@ namespace ShadowCast.Core.Campaign
                     continue;
                 }
 
-                Vector3 position = wall.TransformPoint(placement.WallLocalPosition);
+                Vector3 position = WallPoint(placement.WallLocalPosition);
                 Quaternion rotation = wall.rotation * Quaternion.Euler(placement.WallLocalEulerAngles);
                 GameObject instance = Instantiate(placement.Prefab, position, rotation, runtimeRoot);
                 instance.name = string.IsNullOrWhiteSpace(placement.PlacementId) ? placement.Prefab.name : placement.PlacementId;
@@ -159,11 +169,13 @@ namespace ShadowCast.Core.Campaign
                 {
                     SetLayerRecursively(instance.transform, 0);
                     levelKeys.Add(key);
+                    gameplayObjects.Add(instance.transform);
                     continue;
                 }
 
                 if (instance.GetComponent<CharacterAbilityPowerup>() != null)
                 {
+                    gameplayObjects.Add(instance.transform);
                     SetLayerRecursively(instance.transform, 0);
                     continue;
                 }
@@ -189,7 +201,7 @@ namespace ShadowCast.Core.Campaign
                     continue;
                 }
 
-                Vector3 position = wall.TransformPoint(placement.WallLocalPosition);
+                Vector3 position = WallPoint(placement.WallLocalPosition);
                 Quaternion rotation = wall.rotation * Quaternion.Euler(placement.WallLocalEulerAngles);
                 GameObject instance = Instantiate(placement.Prefab, position, rotation, runtimeRoot);
                 instance.name = $"LevelLight_{level.Id}_{levelLights.Count + 1}";
@@ -214,15 +226,16 @@ namespace ShadowCast.Core.Campaign
 
         private void CreateGoal(LevelDefinition level)
         {
-            Vector3 goalPosition = wall.TransformPoint(level.GoalWallLocalPosition);
-            GameObject goal = goalPrefab != null ? Instantiate(goalPrefab) : GameObject.CreatePrimitive(PrimitiveType.Cube);
-            goal.name = "LevelGoal";
+            Vector3 goalPosition = WallPoint(level.GoalWallLocalPosition);
+            GameObject goal = new GameObject("LevelGoal");
+            GameObject visual = goalPrefab != null ? Instantiate(goalPrefab, goal.transform) : GameObject.CreatePrimitive(PrimitiveType.Cube);
+            visual.transform.SetParent(goal.transform, false);
             goal.transform.SetParent(runtimeRoot, false);
             goal.transform.SetPositionAndRotation(goalPosition, wall.rotation);
             goal.transform.localScale = new Vector3(level.GoalSize.x, level.GoalSize.y, 0.04f);
             if (goalPrefab == null)
             {
-                Renderer goalRenderer = goal.GetComponent<Renderer>();
+                Renderer goalRenderer = visual.GetComponent<Renderer>();
                 if (goalRenderer != null)
                 {
                     Material material = new Material(Shader.Find("Universal Render Pipeline/Lit") ?? Shader.Find("Standard"));
@@ -230,8 +243,10 @@ namespace ShadowCast.Core.Campaign
                     goalRenderer.sharedMaterial = material;
                 }
             }
-            Collider solidCollider = goal.GetComponent<Collider>();
-            if (solidCollider != null) Destroy(solidCollider);
+            // Destroy is deferred until the end of the frame. Keep 3D visual colliders
+            // off the physics root so AddComponent<BoxCollider2D> can succeed now.
+            foreach (Collider solidCollider in visual.GetComponentsInChildren<Collider>(true))
+            { solidCollider.enabled = false; Destroy(solidCollider); }
             BoxCollider2D trigger = goal.GetComponent<BoxCollider2D>();
             if (trigger == null) trigger = goal.AddComponent<BoxCollider2D>();
             trigger.isTrigger = true;
@@ -260,6 +275,7 @@ namespace ShadowCast.Core.Campaign
                 condition = keyedExit;
             }
             goal.AddComponent<CampaignGoalTrigger>().Configure(flowController, condition);
+            gameplayObjects.Add(goal.transform);
         }
 
         private GameObject CreatePrimitiveCharacter(Vector3 position)
@@ -267,7 +283,7 @@ namespace ShadowCast.Core.Campaign
             GameObject player = new GameObject("Campaign Blob");
             player.SetActive(false);
             player.transform.SetParent(runtimeRoot, true);
-            player.transform.SetPositionAndRotation(position, wall.rotation);
+            player.transform.SetPositionAndRotation(position, Quaternion.identity);
             Rigidbody2D body = player.AddComponent<Rigidbody2D>();
             body.freezeRotation = true;
             body.gravityScale = 2.4f;
@@ -286,5 +302,8 @@ namespace ShadowCast.Core.Campaign
             target.gameObject.layer = layer;
             for (int i = 0; i < target.childCount; i++) SetLayerRecursively(target.GetChild(i), layer);
         }
+
+        // Authored offsets are metres; wall.localScale encodes the surface dimensions.
+        private Vector3 WallPoint(Vector3 offset) => wall.position + wall.rotation * offset;
     }
 }
