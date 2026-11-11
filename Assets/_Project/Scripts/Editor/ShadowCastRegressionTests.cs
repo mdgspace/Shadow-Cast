@@ -9,6 +9,35 @@ using UnityEngine.XR.OpenXR.Features.Interactions;
 public sealed class ShadowCastRegressionTests
 {
     [Test]
+    public void StationarySetupStopsRigGravityWithoutDisablingCameraTracking()
+    {
+        var cameraObject = new GameObject("Stationary Camera");
+        var body = new GameObject("VR Player");
+        var existingLocomotors = Object.FindObjectsByType<Oculus.Interaction.Locomotion.FirstPersonLocomotor>(FindObjectsInactive.Include);
+        var existingControllers = Object.FindObjectsByType<Oculus.Interaction.Locomotion.CharacterController>(FindObjectsInactive.Include);
+        var originalStates = new Dictionary<Behaviour, bool>();
+        foreach (var existing in existingLocomotors) originalStates[existing] = existing.enabled;
+        foreach (var existing in existingControllers) originalStates[existing] = existing.enabled;
+        try
+        {
+            var camera = cameraObject.AddComponent<Camera>();
+            var locomotor = body.AddComponent<Oculus.Interaction.Locomotion.FirstPersonLocomotor>();
+            var controller = body.AddComponent<Oculus.Interaction.Locomotion.CharacterController>();
+            ShadowCast.Core.Campaign.ShadowCastXRInput.ConfigureStationaryPlayer(camera);
+            Assert.That(locomotor.enabled, Is.False);
+            Assert.That(controller.enabled, Is.False);
+            Assert.That(camera.enabled, Is.True);
+            Assert.That(cameraObject.transform.position, Is.EqualTo(Vector3.zero));
+        }
+        finally
+        {
+            Object.DestroyImmediate(body);
+            Object.DestroyImmediate(cameraObject);
+            foreach (var state in originalStates) if (state.Key != null) state.Key.enabled = state.Value;
+        }
+    }
+
+    [Test]
     public void ConfiguringBoundsDoesNotMoveTheCampaignOrItsWall()
     {
         var root = new GameObject("Campaign Test");

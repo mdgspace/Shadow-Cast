@@ -4,7 +4,7 @@ See [Quest Link validation and controller controls](VR_VALIDATION.md) for setup 
 
 ## Run the headset sample
 
-The sample experience starts automatically when a scene loads. It accepts OpenXR controllers and tracked hands, with or without an authored Meta rig. Aim with the right hand and pinch the thumb and index finger to select a menu item. The menu is placed two metres in front of the headset and stays in place until another page opens. The mock wall is placed about 2.8 m ahead.
+The sample experience starts automatically when a scene loads. It accepts OpenXR controllers and tracked hands, with or without an authored Meta rig. Aim with the right hand and pinch the thumb and index finger to select a menu item. Navigation menus stay two metres in front of the headset so delayed Link tracking cannot leave them behind. Build menus remain in world space. The campaign disables first-person rig locomotion so the XR origin cannot fall through the floorless sample scene. The mock wall is placed about 2.8 m ahead.
 
 In build mode, pinch the right thumb and index finger near an object to grab it. While holding it, pinch the left thumb and index finger and point to adjust depth. Pinch the right thumb and pinky to show or hide the build menu; pinch the right thumb and ring finger to open the object picker. Left thumb-middle and thumb-ring pinches undo and redo. During play, hold a left index pinch and move that hand left or right to move, use a right middle pinch to jump, right ring pinch to dash, and right pinky pinch to pause. Keyboard and mouse remain available for desktop testing.
 

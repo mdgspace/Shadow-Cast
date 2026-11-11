@@ -54,6 +54,7 @@ namespace ShadowCast.Core.Campaign
             }
 
             ShadowCastXRInput.EnsureCameraTracking(camera);
+            ShadowCastXRInput.ConfigureStationaryPlayer(camera);
             MixedRealityPassthroughBootstrap.Ensure(gameObject, camera);
             EnsureEventSystem();
             BuildModeManager build = FindAnyObjectByType<BuildModeManager>();
@@ -85,6 +86,7 @@ namespace ShadowCast.Core.Campaign
             CampaignGameplayHUD gameplayHud = gameObject.AddComponent<CampaignGameplayHUD>();
             gameplayHud.Initialize(flow, camera);
             ui.Initialize(flow, build, camera, this, gameplayHud, wallPlacement);
+            Debug.Log($"[Shadow Cast] Campaign UI ready in '{camera.gameObject.scene.name}' using '{camera.name}'.", this);
         }
 
         private ChapterDefinition CreateSampleCampaign()
@@ -279,7 +281,6 @@ namespace ShadowCast.Core.Campaign
         private WallPlacementController wallPlacement;
         private GameObject blockPrefab, rampPrefab, orbPrefab;
         private CampaignScreen currentScreen;
-        private float initialCanvasPlacementDeadline;
         public bool BlocksBuildInput => currentScreen != CampaignScreen.Build || canvasVisible || (gameplayHud != null && gameplayHud.IsPaused);
 
         public void Initialize(CampaignFlowController controller, BuildModeManager manager, Camera playerCamera, ShadowCastExperienceBootstrap experience, CampaignGameplayHUD hud, WallPlacementController placement)
@@ -290,9 +291,6 @@ namespace ShadowCast.Core.Campaign
                 blockPrefab = experience.BlockPrefab; rampPrefab = experience.RampPrefab; orbPrefab = experience.OrbPrefab;
             }
             CreateCanvas();
-            // XR tracking commonly updates the eye camera after scene/runtime Awake. Keep
-            // settling the first menu briefly so it cannot be stranded at the rig origin.
-            initialCanvasPlacementDeadline = Time.unscaledTime + 1.5f;
             flow.ScreenChanged += OnScreen;
             flow.MessageChanged += OnMessage;
             OnScreen(flow.CurrentScreen);
@@ -503,7 +501,10 @@ namespace ShadowCast.Core.Campaign
 
         private void LateUpdate()
         {
-            if (view != null && canvas != null && canvasVisible && Time.unscaledTime <= initialCanvasPlacementDeadline)
+            // Link can deliver its first/recentered pose long after scene startup.
+            // Navigation stays in view; the build menu remains placed in world space.
+            if (view != null && canvas != null && canvasVisible &&
+                (currentScreen == CampaignScreen.MainMenu || currentScreen == CampaignScreen.ChapterSelect || currentScreen == CampaignScreen.LevelSelect))
                 PositionCanvasInView();
         }
 

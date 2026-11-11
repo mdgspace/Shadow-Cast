@@ -34,6 +34,59 @@ public static class ShadowCastPlayModeChecks
     private static bool controllerChecked;
     private static string controllerFailure;
 
+    [MenuItem("Tools/Shadow Cast/Run Startup Visibility Check (30 seconds)")]
+    public static void RunStartupVisibilityCheck()
+    {
+        if (!EditorApplication.isPlaying) throw new InvalidOperationException("Enter Play Mode first.");
+        var startupReport = new Report { status = "running" };
+        Camera camera = Camera.main;
+        Transform origin = ShadowCastXRInput.TrackingSpace ?? camera.transform;
+        Vector3 originalPosition = origin.position;
+        Vector3 expectedPosition = originalPosition;
+        double started = EditorApplication.timeSinceStartup;
+        bool shifted = false;
+        Object.FindAnyObjectByType<CampaignFlowController>().ReturnToMainMenu();
+        void SaveReport() => File.WriteAllText("Logs/VR-startup-visibility.json", JsonUtility.ToJson(startupReport, true));
+        Directory.CreateDirectory("Logs");
+        SaveReport();
+        EditorApplication.CallbackFunction tick = null;
+        tick = () =>
+        {
+            try
+            {
+                if (!EditorApplication.isPlaying) throw new Exception("Play Mode stopped before startup verification finished.");
+                double elapsed = EditorApplication.timeSinceStartup - started;
+                if (!shifted && elapsed >= 5 && !UnityEngine.XR.XRSettings.isDeviceActive)
+                {
+                    // Reproduce a late Link pose/relocalization after the old 1.5-second window.
+                    origin.position += new Vector3(2, .5f, 1);
+                    expectedPosition = origin.position;
+                    shifted = true;
+                }
+                if (elapsed < 30) return;
+                if (Vector3.Distance(origin.position, expectedPosition) > .01f)
+                    throw new Exception("XR origin drifted while idle: " + origin.position);
+                var artwork = GameObject.Find("Figma Artwork")?.GetComponent<UnityEngine.UI.RawImage>();
+                if (artwork == null || !artwork.isActiveAndEnabled || artwork.texture == null)
+                    throw new Exception("Main menu artwork is not active.");
+                Vector3 viewport = camera.WorldToViewportPoint(artwork.transform.position);
+                if (viewport.z <= 0 || viewport.x < 0 || viewport.x > 1 || viewport.y < 0 || viewport.y > 1)
+                    throw new Exception("Main menu left the camera view: " + viewport);
+                startupReport.passed.Add("XR origin remains stationary for 30 seconds without a world floor");
+                startupReport.passed.Add("Main menu artwork is active and in the camera view");
+                if (shifted) startupReport.passed.Add("Menu follows a delayed tracking-origin change after five seconds");
+                startupReport.status = "passed";
+            }
+            catch (Exception exception) { startupReport.status = "failed"; startupReport.failure = exception.Message; }
+            if (startupReport.status == "running") return;
+            EditorApplication.update -= tick;
+            if (origin != null) origin.position = originalPosition;
+            SaveReport();
+            Debug.Log("[Shadow Cast] Startup visibility check: " + startupReport.status);
+        };
+        EditorApplication.update += tick;
+    }
+
     [MenuItem("Tools/Shadow Cast/Run Play Mode Smoke Checks")]
     public static void Run()
     {

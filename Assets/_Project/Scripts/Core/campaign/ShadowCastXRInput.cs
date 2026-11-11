@@ -57,6 +57,23 @@ namespace ShadowCast.Core.Campaign
         public static bool RawButton(string name) => actions != null && actions.FindAction("XR/" + name)?.IsPressed() == true;
         public static float Move => actions != null ? actions.FindAction("XR/Move").ReadValue<Vector2>().x : 0f;
 
+        public static void ConfigureStationaryPlayer(Camera camera)
+        {
+            if (camera == null) return;
+            // The comprehensive Meta interaction prefab also supplies a first-person
+            // character controller. With no world floor it continuously drops the XR
+            // origin, leaving the world-space campaign UI thousands of metres above it.
+            // This campaign moves the wall character, while physical HMD tracking owns
+            // the player's movement. Disable the synthetic locomotion in this scene.
+            foreach (var locomotor in Object.FindObjectsByType<Oculus.Interaction.Locomotion.FirstPersonLocomotor>(FindObjectsInactive.Include))
+            {
+                if (locomotor.gameObject.scene != camera.gameObject.scene) continue;
+                locomotor.enabled = false;
+                var controller = locomotor.GetComponent<Oculus.Interaction.Locomotion.CharacterController>();
+                if (controller != null) controller.enabled = false;
+            }
+        }
+
         public static bool TryControllerPose(bool left, out Pose pose)
         {
             string side = left ? "Left" : "Right";
