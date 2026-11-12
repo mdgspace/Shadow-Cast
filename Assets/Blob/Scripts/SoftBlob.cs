@@ -54,11 +54,57 @@ public class SoftBlob : MonoBehaviour
     LineRenderer line;
     Vector2 faceVel;
     Vector2 look;
+    Material fillMaterial, outlineMaterial;
 
     public float Radius => radius;
     public Vector2 Centroid { get; private set; }
 
     int TotalPoints => nodeCount * smoothing;
+
+    /// <summary>Call before the object is activated to size a runtime-created campaign Blob.</summary>
+    public void ConfigureForCampaign(float configuredRadius)
+    {
+        radius = Mathf.Max(0.04f, configuredRadius);
+        nodeRadius = radius * 0.13f;
+        outlineWidth = radius * 0.08f;
+    }
+
+    /// <summary>Teleports the complete soft body without leaving its spring nodes behind.</summary>
+    public void ResetAt(Vector2 position)
+    {
+        if (core == null) core = GetComponent<Rigidbody2D>();
+        Vector2 delta = position - core.position;
+        core.position = position;
+        core.linearVelocity = Vector2.zero;
+        if (nodes == null) return;
+        for (int i = 0; i < nodes.Length; i++)
+        {
+            if (nodes[i] == null) continue;
+            nodes[i].position += delta;
+            nodes[i].linearVelocity = Vector2.zero;
+            nodes[i].angularVelocity = 0f;
+        }
+        UpdateCentroid();
+    }
+
+    public void SetGravityScale(float gravityScale)
+    {
+        if (core != null) core.gravityScale = gravityScale;
+        if (nodes == null) return;
+        for (int i = 0; i < nodes.Length; i++)
+            if (nodes[i] != null) nodes[i].gravityScale = gravityScale;
+    }
+
+    /// <summary>Accelerates the complete soft body, preserving its local deformation.</summary>
+    public void SetVelocity(Vector2 velocity)
+    {
+        if (core == null) return;
+        Vector2 change = velocity - core.linearVelocity;
+        core.linearVelocity = velocity;
+        if (nodes == null) return;
+        foreach (Rigidbody2D node in nodes)
+            if (node != null) node.linearVelocity += change;
+    }
 
     void Awake()
     {
@@ -107,10 +153,12 @@ public class SoftBlob : MonoBehaviour
 
             GameObject go = new GameObject("Node" + i);
             go.layer = gameObject.layer;
-            go.transform.position = (Vector2)transform.position + dir * radius;
+            go.transform.position = transform.position + new Vector3(dir.x, dir.y, 0f) * radius;
+            go.transform.SetParent(transform, true);
 
             Rigidbody2D rb = go.AddComponent<Rigidbody2D>();
             rb.mass = nodeMass;
+            rb.gravityScale = core.gravityScale;
             rb.interpolation = RigidbodyInterpolation2D.Interpolate;
             rb.collisionDetectionMode = CollisionDetectionMode2D.Continuous;
             CircleCollider2D cc = go.AddComponent<CircleCollider2D>();
@@ -166,6 +214,7 @@ public class SoftBlob : MonoBehaviour
 
         MeshRenderer mr = GetComponent<MeshRenderer>();
         Material mat = new Material(Shader.Find("Sprites/Default"));
+        fillMaterial = mat;
         mat.color = fillColor;
         if (fillTexture != null) mat.mainTexture = fillTexture;
         mr.material = mat;
@@ -199,7 +248,8 @@ public class SoftBlob : MonoBehaviour
         line.positionCount = total;
         line.widthMultiplier = outlineWidth;
         line.numCornerVertices = 4;
-        line.material = new Material(Shader.Find("Sprites/Default"));
+        outlineMaterial = new Material(Shader.Find("Sprites/Default"));
+        line.sharedMaterial = outlineMaterial;
         line.startColor = line.endColor = outlineColor;
         line.sortingOrder = sortingOrder + 1;
         linePts = new Vector3[total];
@@ -257,8 +307,8 @@ public class SoftBlob : MonoBehaviour
                 Vector2 p = Spline(p0, p1, p2, p3, s / (float)smoothing);
 
                 p += (p - c).normalized * nodeRadius;
-                linePts[k] = p;
-                verts[k] = transform.InverseTransformPoint(p);
+                linePts[k] = new Vector3(p.x, p.y, transform.position.z);
+                verts[k] = transform.InverseTransformPoint(linePts[k]);
 
 
                 float ang = (i + s / (float)smoothing) * Mathf.PI * 2f / nodeCount;
@@ -266,7 +316,7 @@ public class SoftBlob : MonoBehaviour
             }
         }
 
-        verts[total] = transform.InverseTransformPoint(c);
+        verts[total] = transform.InverseTransformPoint(new Vector3(c.x, c.y, transform.position.z));
         uvs[total] = Vector2.one * 0.5f;
         mesh.vertices = verts;
         mesh.uv = uvs;
@@ -290,5 +340,13 @@ public class SoftBlob : MonoBehaviour
         face.position = new Vector3(pos.x + faceVel.x * Time.deltaTime,
                                    pos.y + faceVel.y * Time.deltaTime,
                                    face.position.z);
+    }
+
+    void OnDestroy()
+    {
+        if (mesh != null) Destroy(mesh);
+        if (nodeMat != null) Destroy(nodeMat);
+        if (fillMaterial != null) Destroy(fillMaterial);
+        if (outlineMaterial != null) Destroy(outlineMaterial);
     }
 }

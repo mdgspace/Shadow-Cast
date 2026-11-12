@@ -33,7 +33,7 @@ sealed partial class ReadmeEditor : Editor
         }
 
         var readmeObject = AssetDatabase.LoadAssetByGUID<Readme>(ids[0]);
-        Selection.activeObject = readmeObject;
+        UnityEditor.Selection.activeObject = readmeObject;
         return readmeObject;
     }
 
